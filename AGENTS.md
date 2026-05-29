@@ -30,10 +30,11 @@
 
 > **Magika 불가 이유**: silent 설치 플래그가 프레임워크별로 다름 (`/S`, `/VERYSILENT`, `/qn` 등). Magika는 NSIS와 Inno Setup을 구분하지 못하므로 올바른 플래그 선택 불가.
 
-**결정: DIE (`diePython`) 도입 — Phase 3 예정**
-- `pip install diePython` — 외부 exe 없이 Python 코드에서 직접 호출
-- 시그니처 파일은 JavaScript `.sg` 형태의 오픈소스
-- 기존 `Classify-Tool/data.txt` (491건)으로 파리티 검증
+**결정: DIE (`diec.exe`) subprocess 방식 도입 — Phase 3 ✅ 완료**
+- `diec --json <file>` — JSON 출력 파싱으로 교체 (기존 subprocess 패턴 유지)
+- 설치 경로: `C:\Program Files\DIE\diec.exe` (환경변수 기반)
+- `DIE_INSTALLER_MAP` / `DIE_SFX_MAP` 으로 DIE 출력 → INSTALLER_TYPE_LIST 매핑
+- 기존 `Classify-Tool/data.txt` (491건)으로 파리티 검증 권장
 
 ---
 
@@ -260,6 +261,14 @@ subprocess.run([file_path, "-s", "-f1response.iss"])
 | `close_windows` clicks 리스트 콤마 누락 | `utils.py` — `"close"` 뒤 `,` 없음 → 문자열 연결 버그 | ✅ 수정 완료 |
 | `check_radiobutton` 콤마 누락 + 로직 버그 | `gui_install.py` — `"확인"` 뒤 `,` 없음, 항상 첫 번째 버튼 클릭 | ✅ 수정 완료 |
 | `classify_installer()` 중복 | `utils.py`, `Tool/` 스크립트들 | ⏳ Phase 4 예정 |
+| `silent_mode.py` terminate/communicate 순서 역전 | `silent_mode.py:84` — communicate 전 terminate 호출로 silent install 항상 실패 | ✅ 수정 완료 |
+| `excluded_paths` 하드코딩 | `main.py:73` — config.py 상수 미활용 | ✅ `DIEC_EXE`/`SEVEN_ZIP_EXE` 기반으로 수정 |
+| `zip` 타입 잘못된 라우팅 | `main.py` — zip 압축해제 실패 후 silent/GUI 시도 (무의미) | ✅ zip 타입은 압축해제 실패 시 바로 skip |
+| `move_file` 비원자적 동작 | `filesystem_monitor.py` — `shutil.copy` + `os.remove` 조합 | ✅ `shutil.move` 단일 호출로 교체 |
+| `click_button` "later" 중복 | `gui_install.py:58` | ✅ 중복 제거 |
+| `note_file_txt` 경로 하드코딩 | `utils.py` — 상대 경로 `log_files.txt` | ✅ `LOG_FILE` (`C:\Data\log_files.txt`) 사용 |
+| `ClassifyTool.exe` 의존성 | `utils.py`, `config.py` | ✅ Phase 3으로 `diec.exe` 교체 |
+| `README.md` 내부 노트 공개 | 작업 메모·실험 결과가 공개 레포에 노출 | ✅ 공개용으로 재작성 |
 
 **Python 문자열 연결 버그 설명 (수정 완료)**
 
@@ -333,49 +342,46 @@ python auto_install/main.py <installer_folder_path>
 |-------|------|--------|------|
 | 1 | 코드 정리 (config.py, import 정리, 오타 수정) | 낮음 | ✅ 완료 |
 | 2 | 로직 버그 수정 + 구버전 파일 삭제 | 중간 | ✅ 완료 |
-| 3 | ClassifyTool.exe → DIE(`diePython`) 교체 | 높음 | ⏳ 예정 |
+| 3 | ClassifyTool.exe → DIE(`diec.exe`) 교체 | 높음 | ✅ 완료 |
+| 3.5 | 추가 버그 수정 (silent_mode, excluded_paths, zip 라우팅, shutil.move 등) | 중간 | ✅ 완료 |
 | 4 | Tool/ 디렉토리 정리 | 낮음 | ⏳ 예정 |
 
 ---
 
-## Phase 3 상세 — ClassifyTool.exe → DIE(`diePython`)
+## Phase 3 상세 — ClassifyTool.exe → DIE(`diec.exe`) ✅ 완료
 
-### 교체 방법
+### 교체 내용
 
-```bash
-pip install diePython
-```
+`diec.exe --json <file>` subprocess 방식 채택 (기존 패턴 유지, Python 추가 의존성 없음).
 
-`utils.py`의 `classify_installer()` 교체 대상:
+`config.py` 변경:
+- `CLASSIFY_TOOL_EXE` 제거
+- `DIEC_EXE` 추가 (`C:\Program Files\DIE\diec.exe`)
+- `DIE_INSTALLER_MAP` / `DIE_SFX_MAP` 추가 (DIE 출력 → INSTALLER_TYPE_LIST 매핑)
+- `LOG_FILE` 추가 (`C:\Data\log_files.txt`)
 
-```python
-# 현재 — ClassifyTool.exe subprocess
-result = subprocess.run([CLASSIFY_TOOL_EXE, file_path], capture_output=True, timeout=60)
-output = result.stdout.decode('latin-1').split('->')[-1].strip()
-
-# 교체 후 — diePython 직접 호출
-import dielib
-
-def classify_installer(file_path: str) -> str:
-    die = dielib.Scanner()
-    result = die.scan(file_path)
-    # result를 파싱해 INSTALLER_TYPE_LIST 매핑
-    ...
-```
-
-또는 `diec.exe` subprocess 방식 (기존 패턴 유지):
+`utils.py` `classify_installer()` 교체:
 
 ```python
-DIEC_EXE = os.path.join(os.environ.get('PROGRAMFILES', 'C:\\Program Files'), "DIE", "diec.exe")
-
+# DIE JSON 출력 파싱
 result = subprocess.run([DIEC_EXE, "--json", file_path], capture_output=True, timeout=60)
-output = json.loads(result.stdout)
+data = json.loads(result.stdout)
+
+for detect in data.get("detects", []):
+    filetype = detect.get("filetype", "").lower()
+    if filetype in {"cab", "archive"}:
+        return "zip"
+    for value in detect.get("values", []):
+        if value["type"].lower() == "sfx":
+            # 7-Zip SFX → "7z installer", 그 외 → "zip"
+        if value["type"].lower() == "installer":
+            # DIE_INSTALLER_MAP으로 name 매핑
 ```
 
-### 검증
+### 검증 권장
 
 - `Classify-Tool/data.txt` (491건) 분류 결과와 비교하여 100% 파리티 목표
-- 교체 완료 후 `Classify-Tool/` 로컬 디렉토리 삭제
+- 검증 완료 후 로컬 `Classify-Tool/` 디렉토리 삭제 가능
 
 ---
 

@@ -3,7 +3,7 @@ import time
 import sys
 import ctypes
 
-from config import SYS_DRIVE, DATA_FOLDER
+from config import SYS_DRIVE, DATA_FOLDER, SEVEN_ZIP_EXE, DIEC_EXE
 from extract_zip import extract_archive
 from silent_mode import run_silent_install
 from gui_install import gui_install
@@ -70,8 +70,8 @@ def main(path):
     success_gui_cnt = 0
 
     excluded_paths = [
-        os.path.join("C:\\Program Files (x86)", "Classify-Tool"),
-        os.path.join("C:\\Program Files", "7-Zip"),
+        os.path.dirname(DIEC_EXE),
+        os.path.dirname(SEVEN_ZIP_EXE),
         os.path.join(os.getcwd(), "auto_install")
     ]
 
@@ -91,6 +91,11 @@ def main(path):
                     success_zip_cnt += 1
                     continue
                 note_file_txt(file_path, title='[zip_failed] : ')
+
+                # zip 타입은 압축해제만 지원 — silent/GUI 시도 불필요
+                if installer_type == 'zip':
+                    print(f"Archive extraction failed, skipping: {file_path}")
+                    continue
                 time.sleep(5)
 
                 # step 2: Silent mode

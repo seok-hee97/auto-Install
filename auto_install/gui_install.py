@@ -55,7 +55,7 @@ def click_button(window):
         "run", "i agree", "continue", "done", "close",
         "enable", "retry", "don't send", "don't save",
         "continue", "unzip", "open", "close the program", "save",
-        "later", "end", "keep", "allow access", "remind me later", "later", "select", "select all",
+        "later", "end", "keep", "allow access", "remind me later", "select", "select all",
         "ignore",
         # kor
         "예", "예(Y)", "마침", "확인", "설치", "다음", "완료", "동의", "무시", "종료", "종료(f)", "계속",

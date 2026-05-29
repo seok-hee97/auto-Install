@@ -1,4 +1,5 @@
 import os
+import json
 import shutil
 import subprocess
 import time
@@ -7,7 +8,7 @@ import ctypes
 from pywinauto import Desktop
 import psutil
 
-from config import CLASSIFY_TOOL_EXE, ZIP_TYPE_LIST, INSTALLER_TYPE_LIST
+from config import DIEC_EXE, INSTALLER_TYPE_LIST, DIE_INSTALLER_MAP, DIE_SFX_MAP, LOG_FILE
 
 
 def terminate_installation_process(file_path: str) -> bool:
@@ -88,27 +89,47 @@ def set_windows_error_mode():
     ctypes.windll.kernel32.SetErrorMode(error_mode)
 
 
-def classify_installer(file_path: str, exe_path=CLASSIFY_TOOL_EXE) -> str:
+def classify_installer(file_path: str, exe_path=DIEC_EXE) -> str:
 
     if not os.path.exists(exe_path):
-        print(f"Error: ClassifyTool.exe not found at {exe_path}")
+        print(f"Error: diec.exe not found at {exe_path}")
         return "Error"
 
     try:
-        result = subprocess.run([exe_path, file_path], capture_output=True, timeout=60)
-        output = result.stdout.decode('latin-1').split('->')[-1].strip()
+        result = subprocess.run(
+            [exe_path, "--json", file_path],
+            capture_output=True, timeout=60
+        )
+        data = json.loads(result.stdout)
 
-        if any(zip_type in output.lower() for zip_type in ZIP_TYPE_LIST):
-            return 'zip'
+        for detect in data.get("detects", []):
+            filetype = detect.get("filetype", "").lower()
 
-        if "Installer:" in output:
-            installer_info = output.split("Installer:")[-1].strip()
-            for installer_type in INSTALLER_TYPE_LIST:
-                if installer_type in installer_info:
-                    return installer_type
+            # CAB / 순수 아카이브 파일타입 → zip
+            if filetype in {"cab", "archive"}:
+                return "zip"
 
-        return 'Unknown'
+            for value in detect.get("values", []):
+                value_type = value.get("type", "").lower()
+                value_name = value.get("name", "").lower()
 
+                if value_type == "sfx":
+                    # 7-Zip SFX → 7z installer; 그 외 SFX → zip
+                    for key, installer_type in DIE_SFX_MAP.items():
+                        if key in value_name:
+                            return installer_type
+                    return "zip"
+
+                if value_type == "installer":
+                    for key, installer_type in DIE_INSTALLER_MAP.items():
+                        if key in value_name:
+                            return installer_type
+
+        return "Unknown"
+
+    except json.JSONDecodeError as e:
+        print(f"Error parsing DIE output for {file_path}: {e}")
+        return "Error"
     except subprocess.TimeoutExpired:
         print(f"Timeout occurred while processing {file_path}")
         return "Timeout"
@@ -172,8 +193,8 @@ def move_to_file(src_path: str, dst_path: str) -> int:
 def note_file_txt(file_path: str, title: str = '') -> None:
 
     try:
-        output_file = 'log_files.txt'
-        with open(output_file, 'a', encoding='utf-8') as f:
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+        with open(LOG_FILE, 'a', encoding='utf-8') as f:
             f.write(f"{title} {file_path}\n")
     except Exception as e:
         print(f"파일 기록 중 오류 발생: {e}")

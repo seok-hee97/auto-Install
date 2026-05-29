@@ -41,8 +41,7 @@ class InstallationMonitor(FileSystemEventHandler):
             return
 
         try:
-            shutil.copy(src_path, dest_path)
-            os.remove(src_path)
+            shutil.move(src_path, dest_path)
         except Exception as e:
             print(f"Error occurred while moving file: {str(e)}")
 

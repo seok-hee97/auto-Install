@@ -82,18 +82,19 @@ def run_silent_install(file_path, installer_type, timeout_sec=180):
             return False
 
         try:
-            terminate_installation_process(file_path)
-            close_windows()
-
             stdout, stderr = process.communicate(timeout=timeout_sec)
             if process.returncode == 0:
                 print(f"Successfully silent installed: {file_path}")
                 return True
             else:
                 print(f"Silent Installation failed: {file_path}. Error: {stderr.decode()}")
+                terminate_installation_process(file_path)
+                close_windows()
                 return False
         except subprocess.TimeoutExpired:
             process.kill()
+            terminate_installation_process(file_path)
+            close_windows()
             print(f"Silent Installation timed out: {file_path}")
             return False
 
