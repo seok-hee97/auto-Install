@@ -1,10 +1,25 @@
+import logging
 import os
 import time
 
 from pywinauto import Desktop
 from pywinauto import Application
+import psutil
 
-from utils import set_windows_error_mode, terminate_installation_process, close_windows
+from utils import set_windows_error_mode, terminate_process_tree, close_windows
+
+logger = logging.getLogger(__name__)
+
+COMPLETION_KEYWORDS = [
+    "finish", "completed", "complete", "done", "close",
+    "마침", "완료", "종료",
+    "fertig", "beenden",
+]
+
+DANGER_KEYWORDS = [
+    "uninstall", "remove", "deinstallieren", "entfernen",
+    "restart now", "reboot now", "jetzt neu starten",
+]
 
 
 def wait_for_progress(window, timeout=30):
@@ -12,23 +27,23 @@ def wait_for_progress(window, timeout=30):
     try:
         for progress in window.descendants(control_type="ProgressBar"):
             if progress.is_visible():
-                print("waiting progressbar")
+                logger.info("Waiting for progress bar")
                 while progress.is_visible() and get_progress_value(progress) < 100:
                     value = get_progress_value(progress)
-                    print(f"progressbar value: {value}%")
+                    logger.debug("Progress: %d%%", value)
                     time.sleep(2)
 
                     if time.time() - start_time > timeout:
-                        print("Progress bar timeout reached")
+                        logger.warning("Progress bar timeout reached")
                         break
 
                     if not progress.is_visible():
-                        print("Progress bar not visible")
+                        logger.debug("Progress bar no longer visible")
                         break
 
-                print("Progress completed or window closed")
+                logger.info("Progress completed or window closed")
     except Exception as e:
-        print(f"Progress bar handling error: {e}")
+        logger.warning("Progress bar handling error: %s", e)
 
 
 def get_progress_value(progress):
@@ -40,10 +55,10 @@ def get_progress_value(progress):
         else:
             return 0
     except ValueError:
-        print(f"Invalid progress value: {properties.get('Value', 'N/A')}")
+        logger.warning("Invalid progress value")
         return 0
     except Exception as e:
-        print(f"Error getting progress value: {e}")
+        logger.warning("Error getting progress value: %s", e)
         return 0
 
 
@@ -69,29 +84,43 @@ def click_button(window):
         # ru
         "установить",
     ]
+    clicked_completion = False
     try:
         for button in window.descendants(control_type="Button"):
             button_text = button.window_text().lower()
 
+            if any(danger in button_text for danger in DANGER_KEYWORDS):
+                logger.info("Skipping dangerous button: %s", button_text)
+                continue
+
             for click in clicks:
                 if click in button_text:
-                    print(f"Clicking button: {button_text}")
+                    logger.info("Clicking button: %s", button_text)
                     button.click_input()
+                    if any(keyword in button_text for keyword in COMPLETION_KEYWORDS):
+                        clicked_completion = True
+                    break
 
     except Exception as e:
-        print(f"Button handling error: {e}")
+        logger.warning("Button handling error: %s", e)
+    return clicked_completion
 
 
 def check_checkbox(window):
 
     try:
         for checkbox in window.descendants(control_type="CheckBox"):
-            print(f"Checkbox: {checkbox.window_text()}")
-            checkbox.click_input()
-            print("Checked a checkbox")
+            logger.debug("Checkbox: %s", checkbox.window_text())
+            try:
+                state = checkbox.get_toggle_state()
+            except Exception:
+                state = None
+            if state == 0:
+                checkbox.click_input()
+                logger.info("Checked a checkbox: %s", checkbox.window_text())
             break
     except Exception as e:
-        print(f"Checkbox handling error: {e}")
+        logger.warning("Checkbox handling error: %s", e)
 
 
 def check_radiobutton(window):
@@ -107,16 +136,16 @@ def check_radiobutton(window):
     try:
         for radiobutton in window.descendants(control_type="RadioButton"):
             radiobutton_text = radiobutton.window_text().lower()
-            print(f"radiobutton: {radiobutton_text}")
+            logger.debug("RadioButton: %s", radiobutton_text)
 
             for radio_button in radiobutton_list:
                 if radio_button in radiobutton_text:
                     radiobutton.click()
-                    print("Checked a RadioButton")
+                    logger.info("Checked a RadioButton: %s", radiobutton_text)
                     return
 
     except Exception as e:
-        print(f"RadioButton handling error: {e}")
+        logger.warning("RadioButton handling error: %s", e)
 
 
 def get_install_windows(file_path):
@@ -153,35 +182,40 @@ def get_install_windows(file_path):
                     get_windows.append(window)
         return get_windows
     except Exception as e:
-        print(f"Error while checking installation window: {str(e)}")
+        logger.warning("Error while checking installation window: %s", e)
         return get_windows
 
 
 def gui_install(file_path, step=20):
 
-    print("def gui_install() working!!")
+    logger.info("gui_install() start: %s", file_path)
     pass_window = ['명령 프롬프트', 'sublime', 'program manager', '작업 표시줄']
 
     if not os.path.exists(file_path):
-        print(f"Error: File not found at {file_path}")
+        logger.error("File not found: %s", file_path)
         return False
     set_windows_error_mode()
     try:
         app = Application(backend="uia").start(file_path)
+        pid = app.process
+        clicked_completion = False
         time.sleep(5)
 
-        for step in range(step):
+        for i in range(step):
             time.sleep(3)
-            print(f"Step {step + 1}")
+            logger.debug("GUI install step %d", i + 1)
             windows: list = app.windows()
-            print("app_windows : ", windows)
+            logger.debug("app_windows: %s", windows)
 
             additional_window = get_install_windows(file_path)
-            windows.extend(additional_window)
-            print("windows : ", windows)
+            merged = {w.handle: w for w in windows}
+            for w in additional_window:
+                merged.setdefault(w.handle, w)
+            windows = list(merged.values())
+            logger.debug("windows: %s", windows)
 
             if len(windows) == 0:
-                print("No relevant windows found.")
+                logger.debug("No relevant windows found.")
                 continue
 
             for window in windows:
@@ -196,22 +230,32 @@ def gui_install(file_path, step=20):
                 if skip_window:
                     continue
 
-                print("window : ", window)
+                logger.debug("Processing window: %s", window)
 
-                click_button(window)
+                if click_button(window):
+                    clicked_completion = True
                 check_checkbox(window)
                 check_radiobutton(window)
                 wait_for_progress(window)
 
-        print("Installation process completed.")
-        ret_process = terminate_installation_process(file_path)
+        logger.info("GUI install loop complete: %s", file_path)
         close_windows()
-        if ret_process:
-            return True     # 프로세스 정상 종료 = 성공
-        return False        # 프로세스를 찾지 못함 = 실패
+
+        process_exited = not psutil.pid_exists(pid)
+        if clicked_completion and process_exited:
+            return True
+
+        logger.info(
+            "GUI install did not meet success criteria: clicked_completion=%s, process_exited=%s",
+            clicked_completion, process_exited
+        )
+        if not process_exited:
+            terminate_process_tree(pid)
+        return False
 
     except Exception as e:
-        print(f"An error occurred: {e}")
-        terminate_installation_process(file_path)
+        logger.error("Error during gui_install %s: %s", file_path, e)
+        if 'pid' in locals():
+            terminate_process_tree(pid)
         close_windows()
         return False

@@ -1,68 +1,122 @@
+import json
+import logging
 import os
 import shutil
+import threading
 import time
-from queue import Queue
+from queue import Empty, Queue
+from datetime import datetime
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+logger = logging.getLogger(__name__)
+
 
 class InstallationMonitor(FileSystemEventHandler):
-    def __init__(self, source_path, destination_path, excluded_paths):
+    def __init__(self, source_path, destination_path, excluded_paths, manifest_path=None, collection_name="default"):
         self.source_path = source_path
         self.destination_path = destination_path
-        self.excluded_paths = excluded_paths + [destination_path]
+        self.manifest_path = manifest_path
+        self.collection_root = os.path.join(destination_path, collection_name)
+        self.excluded_paths = [os.path.normcase(os.path.abspath(path)) for path in excluded_paths + [destination_path]]
         os.makedirs(self.destination_path, exist_ok=True)
+        os.makedirs(self.collection_root, exist_ok=True)
+        if self.manifest_path:
+            os.makedirs(os.path.dirname(self.manifest_path), exist_ok=True)
         self.queue = Queue()
+        self._stop_event = threading.Event()
+        self._worker = threading.Thread(target=self._drain_queue, daemon=True)
+        self._worker.start()
+
+    def _drain_queue(self):
+        while not self._stop_event.is_set():
+            try:
+                src_path, is_directory = self.queue.get(timeout=1)
+            except Empty:
+                continue
+            time.sleep(2)
+            if not os.path.exists(src_path):
+                self.queue.task_done()
+                continue
+            if is_directory:
+                self.copy_directory(src_path)
+            else:
+                self.copy_file(src_path)
+            self.queue.task_done()
 
     def on_created(self, event):
-        if event.src_path.startswith(tuple(self.excluded_paths)):
+        src_path = os.path.normcase(os.path.abspath(event.src_path))
+        if src_path.startswith(tuple(self.excluded_paths)):
             return
         self.queue.put((event.src_path, event.is_directory))
 
     def process_pending(self):
-        """observer 종료 후 큐에 남은 이벤트를 처리한다."""
-        while not self.queue.empty():
-            src_path, is_directory = self.queue.get()
-            time.sleep(2)
-            if not os.path.exists(src_path):
-                continue
-            if is_directory:
-                self.move_directory(src_path)
-            else:
-                self.move_file(src_path)
+        """observer 종료 후 큐에 남은 이벤트를 모두 처리하고 worker를 정지한다."""
+        self._stop_event.set()
+        self.queue.join()
+        self._worker.join(timeout=30)
 
-    def move_file(self, src_path):
-        file_name = os.path.basename(src_path)
-        dest_path = os.path.join(self.destination_path, file_name)
+    def _destination_for(self, src_path):
+        drive, rel_path = os.path.splitdrive(os.path.abspath(src_path))
+        rel_path = rel_path.lstrip("\\/")
+        if drive:
+            rel_path = os.path.join(drive.rstrip(":").replace("\\", "_"), rel_path)
+        return os.path.join(self.collection_root, rel_path)
 
-        if os.path.exists(dest_path):
-            print(f"File already exists. Skipping: {dest_path}")
+    def _write_manifest(self, src_path, dest_path, item_type, status, error=""):
+        if not self.manifest_path:
             return
 
+        record = {
+            "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "source": src_path,
+            "destination": dest_path,
+            "type": item_type,
+            "status": status,
+            "error": error,
+        }
         try:
-            shutil.move(src_path, dest_path)
+            with open(self.manifest_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
         except Exception as e:
-            print(f"Error occurred while moving file: {str(e)}")
+            logger.error("Error writing manifest: %s", e)
 
-    def move_directory(self, src_path):
-        dir_name = os.path.basename(src_path)
-        dest_path = os.path.join(self.destination_path, dir_name)
-
-        if os.path.exists(dest_path):
-            print(f"Directory already exists. Skipping: {dest_path}")
-            return
+    def copy_file(self, src_path):
+        dest_path = self._destination_for(src_path)
 
         try:
+            if os.path.exists(dest_path):
+                self._write_manifest(src_path, dest_path, "file", "skipped", "destination exists")
+                logger.debug("File already exists, skipping: %s", dest_path)
+                return
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            shutil.copy2(src_path, dest_path)
+            self._write_manifest(src_path, dest_path, "file", "copied")
+        except Exception as e:
+            self._write_manifest(src_path, dest_path, "file", "failed", str(e))
+            logger.warning("Error copying file %s: %s", src_path, e)
+
+    def copy_directory(self, src_path):
+        dest_path = self._destination_for(src_path)
+
+        try:
+            if os.path.exists(dest_path):
+                self._write_manifest(src_path, dest_path, "directory", "skipped", "destination exists")
+                logger.debug("Directory already exists, skipping: %s", dest_path)
+                return
             shutil.copytree(src_path, dest_path)
-            shutil.rmtree(src_path)
-            print(f"Directory move completed: {src_path} -> {dest_path}")
+            self._write_manifest(src_path, dest_path, "directory", "copied")
+            logger.info("Directory copied: %s -> %s", src_path, dest_path)
         except Exception as e:
-            print(f"Error occurred while moving directory: {str(e)}")
+            self._write_manifest(src_path, dest_path, "directory", "failed", str(e))
+            logger.warning("Error copying directory %s: %s", src_path, e)
 
 
-def start_monitoring(source_path, destination_path, excluded_paths):
-    event_handler = InstallationMonitor(source_path, destination_path, excluded_paths)
+def start_monitoring(source_path, destination_path, excluded_paths, manifest_path=None, collection_name="default"):
+    event_handler = InstallationMonitor(
+        source_path, destination_path, excluded_paths, manifest_path, collection_name
+    )
     observer = Observer()
     observer.schedule(event_handler, source_path, recursive=True)
     observer.start()

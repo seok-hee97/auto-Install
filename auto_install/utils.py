@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 import shutil
 import subprocess
 import time
@@ -10,32 +11,58 @@ import psutil
 
 from config import DIEC_EXE, INSTALLER_TYPE_LIST, DIE_INSTALLER_MAP, DIE_SFX_MAP, LOG_FILE
 
+logger = logging.getLogger(__name__)
 
-def terminate_installation_process(file_path: str) -> bool:
+_KNOWN_RETURNS = set(INSTALLER_TYPE_LIST) | {"zip", "Unknown", "Error", "Timeout"}
 
-    try:
-        process_name = os.path.splitext(os.path.basename(file_path))[0].lower()
-        process_keywords: list = process_name.split()
 
-        for proc in psutil.process_iter(['name', 'pid']):
-            if any(keyword in proc.info['name'].lower() for keyword in process_keywords):
-                process = psutil.Process(proc.info['pid'])
-                for child in process.children(recursive=True):
-                    child.terminate()
-                process.terminate()
-                print(f"Terminated process: {process_name}")
-                return True
+def terminate_installation_process(pid: int, file_path: str = "") -> bool:
+    if pid:
+        return terminate_process_tree(pid)
 
-        print(f"Process {process_name} not found")
+    if not file_path:
         return False
 
+    process_name = os.path.splitext(os.path.basename(file_path))[0].lower()
+    process_keywords: list = process_name.split()
+
+    try:
+        for proc in psutil.process_iter(['name', 'pid']):
+            if any(keyword in proc.info['name'].lower() for keyword in process_keywords):
+                return terminate_process_tree(proc.info['pid'])
+        logger.warning("Process not found: %s", process_name)
+        return False
     except Exception as e:
-        print(f"Error terminating process {process_name}: {e}")
+        logger.error("Error terminating process %s: %s", process_name, e)
+        return False
+
+
+def terminate_process_tree(pid: int) -> bool:
+    try:
+        process = psutil.Process(pid)
+        children = process.children(recursive=True)
+        for child in children:
+            child.terminate()
+        gone, alive = psutil.wait_procs(children, timeout=5)
+        for child in alive:
+            child.kill()
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except psutil.TimeoutExpired:
+            process.kill()
+        logger.info("Terminated process tree: %d", pid)
+        return True
+    except psutil.NoSuchProcess:
+        logger.info("Process already exited: %d", pid)
+        return False
+    except Exception as e:
+        logger.error("Error terminating process tree %d: %s", pid, e)
         return False
 
 
 def close_windows(step: int = 5) -> None:
-    print("def close_window() working!!")
+    logger.info("close_windows() start")
     clicks = [
         # eng
         "cancel", "exit", "quit", "finish", "yes", "ok", 'x', "later", "close",
@@ -46,13 +73,13 @@ def close_windows(step: int = 5) -> None:
     pass_window = ['명령 프롬프트', 'sublime', 'program manager', "파일 탐색기", "작업 표시줄"]
 
     for i in range(step):
-        print("step : ", i + 1)
+        logger.debug("close_windows step %d", i + 1)
         try:
             time.sleep(1)
             windows = Desktop(backend="uia").windows()
 
             if len(windows) == 0:
-                print("No windows found. Continuing to next step.")
+                logger.debug("No windows found.")
                 continue
 
             for window in windows:
@@ -63,18 +90,18 @@ def close_windows(step: int = 5) -> None:
 
                     for button in window.descendants(control_type="Button"):
                         if any(click in button.window_text().lower() for click in clicks):
-                            print(f"Clicking button: {button.window_text()}")
+                            logger.info("Clicking button: %s", button.window_text())
                             button.click_input()
 
-                    print(f"Closing browser window: {title}")
+                    logger.info("Closing window: %s", title)
                     window.close()
                     time.sleep(1)
 
                 except Exception as e:
-                    print(f"Error processing window: {str(e)}")
+                    logger.warning("Error processing window: %s", e)
 
         except Exception as e:
-            print(f"Error scanning for windows: {str(e)}")
+            logger.warning("Error scanning for windows: %s", e)
 
 
 def set_windows_error_mode():
@@ -92,7 +119,7 @@ def set_windows_error_mode():
 def classify_installer(file_path: str, exe_path=DIEC_EXE) -> str:
 
     if not os.path.exists(exe_path):
-        print(f"Error: diec.exe not found at {exe_path}")
+        logger.error("diec.exe not found at %s", exe_path)
         return "Error"
 
     try:
@@ -123,18 +150,19 @@ def classify_installer(file_path: str, exe_path=DIEC_EXE) -> str:
                 if value_type == "installer":
                     for key, installer_type in DIE_INSTALLER_MAP.items():
                         if key in value_name:
-                            return installer_type
+                            if installer_type in _KNOWN_RETURNS:
+                                return installer_type
 
         return "Unknown"
 
     except json.JSONDecodeError as e:
-        print(f"Error parsing DIE output for {file_path}: {e}")
+        logger.error("Error parsing DIE output for %s: %s", file_path, e)
         return "Error"
     except subprocess.TimeoutExpired:
-        print(f"Timeout occurred while processing {file_path}")
+        logger.warning("Timeout while classifying: %s", file_path)
         return "Timeout"
     except Exception as e:
-        print(f"Error occurred while processing {file_path}: {str(e)}")
+        logger.error("Error classifying %s: %s", file_path, e)
         return "Error"
 
 
@@ -143,7 +171,7 @@ def verify_folder(folder_path):
     count: int = 0
 
     if not os.path.exists(folder_path):
-        print(f"Error: Folder not found at {folder_path}")
+        logger.error("Folder not found: %s", folder_path)
         return -1
 
     for root, dirs, files in os.walk(folder_path):
@@ -156,37 +184,13 @@ def verify_folder(folder_path):
     return count
 
 
-def seperate_installer(folder_path):
-
-    try:
-        cnt = 0
-        path_list = os.listdir(folder_path)
-        dir_name = os.path.dirname(folder_path)
-        print(dir_name)
-
-        for i in path_list:
-            file_path = dir_name + '/' + i
-            print("file_path :", file_path)
-
-            installer_type = classify_installer(file_path)
-
-            src = file_path
-            dst = dir_name + '/' + installer_type
-            move_to_file(src, dst)
-            cnt += 1
-
-        print("count file(move) : ", cnt)
-    except Exception as e:
-        print("error : ", e)
-
-
 def move_to_file(src_path: str, dst_path: str) -> int:
 
     if not os.path.exists(dst_path):
         os.mkdir(dst_path)
 
     shutil.move(src_path, dst_path)
-    print(f'{src_path} has been moved to new folder : {dst_path} !')
+    logger.info("Moved %s -> %s", src_path, dst_path)
     return 0
 
 
@@ -197,4 +201,4 @@ def note_file_txt(file_path: str, title: str = '') -> None:
         with open(LOG_FILE, 'a', encoding='utf-8') as f:
             f.write(f"{title} {file_path}\n")
     except Exception as e:
-        print(f"파일 기록 중 오류 발생: {e}")
+        logger.error("파일 기록 중 오류: %s", e)

@@ -1,8 +1,15 @@
 import os
+import logging
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_DIR = Path(__file__).resolve().parent
 
 SYS_DRIVE = os.environ.get('SYSTEMDRIVE', 'C:') + "\\"
 DATA_FOLDER = SYS_DRIVE + "Data"
 LOG_FILE = os.path.join(DATA_FOLDER, "log_files.txt")
+COLLECTED_FOLDER = os.path.join(DATA_FOLDER, "collected")
+MANIFEST_FILE = os.path.join(DATA_FOLDER, "manifest.jsonl")
 
 SEVEN_ZIP_EXE = os.path.join(
     os.environ.get('PROGRAMFILES', 'C:\\Program Files'), "7-Zip", "7z.exe"
@@ -10,8 +17,6 @@ SEVEN_ZIP_EXE = os.path.join(
 DIEC_EXE = os.path.join(
     os.environ.get('PROGRAMFILES', 'C:\\Program Files'), "DIE", "diec.exe"
 )
-
-ZIP_TYPE_LIST = ['binary-archive', 'sfx', 'cab']
 
 INSTALLER_TYPE_LIST = [
     'Inno Setup', '7z installer', 'InstallShield', 'NSIS',
@@ -48,6 +53,21 @@ DIE_SFX_MAP = {
     "7-zip": "7z installer",
     "7zip": "7z installer",
 }
+
+RUN_LOG_FILE = os.path.join(DATA_FOLDER, "run.log")
+
+
+def setup_logging():
+    os.makedirs(DATA_FOLDER, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[
+            logging.FileHandler(RUN_LOG_FILE, encoding="utf-8"),
+            logging.StreamHandler(),
+        ],
+    )
+
 
 SILENT_COMMANDS = {
     "7z installer": ["/S"],
