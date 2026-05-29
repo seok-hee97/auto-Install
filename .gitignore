@@ -1,0 +1,83 @@
+Data/
+Data-backup/
+Memo.md
+
+Test/
+~$*.xlsx
+
+Compare-Installer-CAPE.xlsx
+
+test-sample/
+test-sample*/
+
+Data*/
+
+NSIS/
+
+7z-Installer/
+
+7-Zip
+
+*.gv
+
+*.7z
+
+
+*.pyc
+
+
+exception_test/
+
+
+silent-test/
+
+backup/
+
+# 독점 실행파일 — open-source 공개 대상 아님
+Classify-Tool/
+
+# 로그 및 출력 파일
+log_files*.txt
+output*.txt
+extracted_*.txt
+auto_install/log_files*.txt
+
+# 임시/작업 노트 파일
+Temp.txt
+temp.txt
+memo*.txt
+test.txt
+deploy.md
+summary.md
+
+# 내부 분석 데이터
+Tool/*.csv
+Tool/*.xlsx
+Tool/*.txt
+Tool/0*.md
+Tool/Temp*.md
+Tool/test.md
+
+# etc-sample-check (내부 테스트 데이터)
+etc-sample-check/
+
+# 날짜 작업 노트
+auto_install/[0-9]*.md
+auto_install/checklist.md
+auto_install/except.md
+
+# 구버전 파일
+auto_install/main1016.py
+auto_install/filesystem_monitor1016.py
+auto_install/output1016.txt
+auto_install/temp.txt
+
+# 테스트/임시 파일
+Test.py
+Test.ipynb
+Test2.py
+Test3.py
+*.ipynb
+
+
+AGENTS
