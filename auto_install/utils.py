@@ -9,7 +9,10 @@ import ctypes
 from pywinauto import Desktop
 import psutil
 
-from config import DIEC_EXE, INSTALLER_TYPE_LIST, DIE_INSTALLER_MAP, DIE_SFX_MAP, LOG_FILE, DANGER_KEYWORDS
+from config import (
+    DIEC_EXE, INSTALLER_TYPE_LIST, DIE_INSTALLER_MAP, DIE_SFX_MAP,
+    LOG_FILE, DANGER_KEYWORDS, PASS_WINDOW,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +52,6 @@ def close_windows(step: int = 5) -> None:
         "취소", "예", "예(Y)", "마침", "확인", "완료", "나중에"
     ]
 
-    pass_window = ['명령 프롬프트', 'sublime', 'program manager', "파일 탐색기", "작업 표시줄"]
-
     for i in range(step):
         logger.debug("close_windows step %d", i + 1)
         try:
@@ -64,7 +65,7 @@ def close_windows(step: int = 5) -> None:
             for window in windows:
                 try:
                     title = window.window_text().lower()
-                    if any(program in title for program in pass_window):
+                    if any(program in title for program in PASS_WINDOW):
                         continue
 
                     for button in window.descendants(control_type="Button"):
@@ -159,7 +160,7 @@ def verify_folder(folder_path):
 
     for root, dirs, files in os.walk(folder_path):
         for file in files:
-            if file.lower().endswith('.exe'):
+            if file.lower().endswith(('.exe', '.msi')):
                 file_path = os.path.join(root, file)
                 installer_type = classify_installer(file_path)
                 if installer_type not in ('Unknown', 'Error', 'Timeout'):

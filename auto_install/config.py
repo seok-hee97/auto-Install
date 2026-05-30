@@ -29,6 +29,31 @@ DANGER_KEYWORDS = [
     "restart now", "reboot now", "jetzt neu starten",
 ]
 
+# RadioButton — 동의 거부 키워드 (이 텍스트가 있으면 클릭 건너뜀)
+DISAGREE_KEYWORDS_RADIO = [
+    "do not agree", "disagree", "decline", "not accept",
+    "동의하지 않", "동의 안 함", "거부",
+    "ablehnen", "nicht akzeptieren", "stimme nicht zu",
+]
+
+# RadioButton — 동의 키워드 (agree_candidate 선정 기준)
+AGREE_KEYWORDS = [
+    "agree", "accept", "i agree", "동의", "확인",
+    "akzeptieren", "zustimmen", "stimme zu", "einverstanden",
+]
+
+# 창 탐색에서 건너뛸 프로그램 목록 (3곳에 분산되어 있던 pass_window 통합)
+PASS_WINDOW = [
+    '명령 프롬프트', 'sublime', 'program manager', '파일 탐색기', '작업 표시줄',
+]
+
+# 설치 창 식별 키워드 (get_install_windows 기준)
+INSTALLATION_KEYWORDS = [
+    "setup", "install", "installer",
+    "wizard", "inno", "nsis", "msi", "language",
+    "설치", "마법사", "언어",
+]
+
 INSTALLER_TYPE_LIST = [
     'Inno Setup', '7z installer', 'InstallShield', 'NSIS',
     'Advanced installer', 'Setup Factory', 'Microsoft Installer(MSI)',

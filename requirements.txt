@@ -1,3 +1,15 @@
-pywinauto == 0.6.8
-watchdog == 5.0.2
-psutil == 6.0.0
+# Core dependencies (required)
+pywinauto==0.6.8
+watchdog==5.0.2
+psutil==6.0.0
+
+# Windows API (Phase 4.8-C: PID tree window detection)
+# Windows 전용 — Linux/macOS에서는 설치 불필요
+pywin32>=306
+
+# Optional: keyboard navigation fallback + OCR (Phase 4.8-E, 4.8-G)
+# pip install pyautogui pytesseract pillow
+# + Tesseract OCR 별도 설치: https://github.com/UB-Mannheim/tesseract/wiki
+# pyautogui>=0.9.54
+# pytesseract>=0.3.10
+# pillow>=10.0.0

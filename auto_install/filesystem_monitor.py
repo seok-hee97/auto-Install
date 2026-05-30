@@ -12,6 +12,30 @@ from watchdog.events import FileSystemEventHandler
 
 logger = logging.getLogger(__name__)
 
+# 수집 대상에서 제외할 확장자 (임시파일·로그·캐시)
+_IGNORED_EXTENSIONS = frozenset({
+    '.tmp', '.log', '.etl', '.evtx', '.db-journal', '.lock',
+    '.part', '.crdownload', '.download', '.bak', '.~',
+})
+
+# 수집 대상에서 제외할 경로 패턴 (소문자 비교)
+_IGNORED_PATH_FRAGMENTS = (
+    'windows\\temp',
+    'appdata\\local\\temp',
+    'appdata\\local\\microsoft\\windows',
+    'appdata\\roaming\\microsoft\\windows',
+    'appdata\\local\\google\\chrome',
+    'appdata\\local\\microsoft\\edge',
+)
+
+
+def _is_noise(path: str) -> bool:
+    path_lower = path.lower()
+    ext = os.path.splitext(path_lower)[1]
+    if ext in _IGNORED_EXTENSIONS:
+        return True
+    return any(frag in path_lower for frag in _IGNORED_PATH_FRAGMENTS)
+
 
 class InstallationMonitor(FileSystemEventHandler):
     def __init__(self, source_path, destination_path, excluded_paths, manifest_path=None, collection_name="default"):
@@ -50,6 +74,9 @@ class InstallationMonitor(FileSystemEventHandler):
     def on_created(self, event):
         src_path = os.path.normcase(os.path.abspath(event.src_path))
         if src_path.startswith(tuple(self.excluded_paths)):
+            return
+        if not event.is_directory and _is_noise(src_path):
+            logger.debug("Skipping noise file: %s", src_path)
             return
         self.queue.put((event.src_path, event.is_directory))
 

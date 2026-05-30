@@ -5,8 +5,11 @@ import time
 
 from pywinauto import Desktop
 
-from config import SILENT_COMMANDS
+from config import SILENT_COMMANDS, PASS_WINDOW, INSTALLATION_KEYWORDS
 from utils import set_windows_error_mode, terminate_process_tree, close_windows
+
+# Windows-only subprocess flag; falls back to 0 on non-Windows
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 logger = logging.getLogger(__name__)
 
@@ -15,42 +18,21 @@ MSI_SUCCESS_CODES = {0, 3010}
 
 
 def check_installation_window():
-
     try:
         desktop = Desktop(backend="uia")
         windows = desktop.windows()
 
-        installation_keywords = [
-            # eng
-            "setup", "install", "installer",
-            "wizard", "inno", "nsis", "msi",
-            # kor
-            "설치", "마법사"
-        ]
-
-        pass_window = ['명령 프롬프트', 'sublime', 'program manager', '작업 표시줄']
-
-        if len(windows) == 0:
+        if not windows:
             logger.debug("No windows found in check_installation_window()")
             return False
 
         for window in windows:
             title = window.window_text().lower()
-
-            skip_window = False
-            for program in pass_window:
-                if program in title:
-                    skip_window = True
-                    break
-
-            if skip_window:
+            if any(p in title for p in PASS_WINDOW):
                 continue
-
             logger.debug("check_install_window: %s", window)
-
-            for keyword in installation_keywords:
-                if keyword in title:
-                    return True
+            if any(k in title for k in INSTALLATION_KEYWORDS):
+                return True
 
         return False
     except Exception as e:
@@ -74,19 +56,28 @@ def run_silent_install(file_path, installer_type, timeout_sec=180):
     try:
         process = subprocess.Popen(
             command,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            creationflags=_CREATE_NO_WINDOW,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
-        time.sleep(5)
 
-        if check_installation_window():
-            terminate_process_tree(process.pid)
-            logger.info("Silent install failed (window detected): %s", file_path)
-            time.sleep(5)
-            close_windows()
-            time.sleep(3)
-            return False
+        # 고정 sleep 대신 폴링: 0.5s 간격으로 최대 8s 동안
+        # 프로세스가 먼저 종료되면 즉시 빠져나오고,
+        # 에러 창이 나타나면 즉시 캐치한다.
+        _POLL_INTERVAL = 0.5
+        _POLL_TIMEOUT = 8.0
+        poll_start = time.time()
+        while time.time() - poll_start < _POLL_TIMEOUT:
+            if process.poll() is not None:
+                break  # 이미 종료 — communicate()로 결과 수집
+            if check_installation_window():
+                terminate_process_tree(process.pid)
+                logger.info("Silent install failed (window detected): %s", file_path)
+                time.sleep(5)
+                close_windows()
+                time.sleep(3)
+                return False
+            time.sleep(_POLL_INTERVAL)
 
         try:
             stdout, stderr = process.communicate(timeout=timeout_sec)
