@@ -18,6 +18,17 @@ DIEC_EXE = os.path.join(
     os.environ.get('PROGRAMFILES', 'C:\\Program Files'), "DIE", "diec.exe"
 )
 
+PROCESSABLE_EXTENSIONS = frozenset(['.exe', '.msi'])
+
+EXTRACTABLE_TYPES = frozenset([
+    '7z installer', 'Microsoft Installer(MSI)', 'NSIS', 'Acronis installer[ZIP]', 'zip'
+])
+
+DANGER_KEYWORDS = [
+    "uninstall", "remove", "deinstallieren", "entfernen",
+    "restart now", "reboot now", "jetzt neu starten",
+]
+
 INSTALLER_TYPE_LIST = [
     'Inno Setup', '7z installer', 'InstallShield', 'NSIS',
     'Advanced installer', 'Setup Factory', 'Microsoft Installer(MSI)',

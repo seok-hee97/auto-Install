@@ -9,32 +9,11 @@ import ctypes
 from pywinauto import Desktop
 import psutil
 
-from config import DIEC_EXE, INSTALLER_TYPE_LIST, DIE_INSTALLER_MAP, DIE_SFX_MAP, LOG_FILE
+from config import DIEC_EXE, INSTALLER_TYPE_LIST, DIE_INSTALLER_MAP, DIE_SFX_MAP, LOG_FILE, DANGER_KEYWORDS
 
 logger = logging.getLogger(__name__)
 
 _KNOWN_RETURNS = set(INSTALLER_TYPE_LIST) | {"zip", "Unknown", "Error", "Timeout"}
-
-
-def terminate_installation_process(pid: int, file_path: str = "") -> bool:
-    if pid:
-        return terminate_process_tree(pid)
-
-    if not file_path:
-        return False
-
-    process_name = os.path.splitext(os.path.basename(file_path))[0].lower()
-    process_keywords: list = process_name.split()
-
-    try:
-        for proc in psutil.process_iter(['name', 'pid']):
-            if any(keyword in proc.info['name'].lower() for keyword in process_keywords):
-                return terminate_process_tree(proc.info['pid'])
-        logger.warning("Process not found: %s", process_name)
-        return False
-    except Exception as e:
-        logger.error("Error terminating process %s: %s", process_name, e)
-        return False
 
 
 def terminate_process_tree(pid: int) -> bool:
@@ -89,7 +68,11 @@ def close_windows(step: int = 5) -> None:
                         continue
 
                     for button in window.descendants(control_type="Button"):
-                        if any(click in button.window_text().lower() for click in clicks):
+                        btn_text = button.window_text().lower()
+                        if any(danger in btn_text for danger in DANGER_KEYWORDS):
+                            logger.info("Skipping dangerous button in close_windows: %s", btn_text)
+                            continue
+                        if any(click in btn_text for click in clicks):
                             logger.info("Clicking button: %s", button.window_text())
                             button.click_input()
 

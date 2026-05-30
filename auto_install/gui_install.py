@@ -6,6 +6,7 @@ from pywinauto import Desktop
 from pywinauto import Application
 import psutil
 
+from config import DANGER_KEYWORDS
 from utils import set_windows_error_mode, terminate_process_tree, close_windows
 
 logger = logging.getLogger(__name__)
@@ -14,11 +15,6 @@ COMPLETION_KEYWORDS = [
     "finish", "completed", "complete", "done", "close",
     "마침", "완료", "종료",
     "fertig", "beenden",
-]
-
-DANGER_KEYWORDS = [
-    "uninstall", "remove", "deinstallieren", "entfernen",
-    "restart now", "reboot now", "jetzt neu starten",
 ]
 
 
@@ -69,7 +65,7 @@ def click_button(window):
         "next", "install", "finish", "ok", "yes", "accept", "agree",
         "run", "i agree", "continue", "done", "close",
         "enable", "retry", "don't send", "don't save",
-        "continue", "unzip", "open", "close the program", "save",
+        "unzip", "open", "close the program", "save",
         "later", "end", "keep", "allow access", "remind me later", "select", "select all",
         "ignore",
         # kor

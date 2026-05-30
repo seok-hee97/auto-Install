@@ -30,10 +30,12 @@ class InstallationMonitor(FileSystemEventHandler):
         self._worker.start()
 
     def _drain_queue(self):
-        while not self._stop_event.is_set():
+        while True:
             try:
                 src_path, is_directory = self.queue.get(timeout=1)
             except Empty:
+                if self._stop_event.is_set():
+                    break
                 continue
             time.sleep(2)
             if not os.path.exists(src_path):
@@ -52,10 +54,10 @@ class InstallationMonitor(FileSystemEventHandler):
         self.queue.put((event.src_path, event.is_directory))
 
     def process_pending(self):
-        """observer 종료 후 큐에 남은 이벤트를 모두 처리하고 worker를 정지한다."""
+        """stop_event를 설정하고 큐가 완전히 드레인될 때까지 대기한다."""
         self._stop_event.set()
         self.queue.join()
-        self._worker.join(timeout=30)
+        self._worker.join(timeout=60)
 
     def _destination_for(self, src_path):
         drive, rel_path = os.path.splitdrive(os.path.abspath(src_path))
