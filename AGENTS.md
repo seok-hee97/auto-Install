@@ -1,6 +1,11 @@
 # AGENTS
 
+## 프로젝트 개요.
+
+설치파일 설치 자동화 프로그램 -> 설치완료된 포로그램 파일 및 데이터 확보.
+
 ## 요구사항
+
 
 - 파일 타입 확인 : 자사 툴 -> 상용 오픈소스
   > ex) magkia : https://github.com/google/magika
@@ -336,7 +341,9 @@ python auto_install/main.py <installer_folder_path>
 
 ---
 
-## 구현 순서
+## 구현 이력
+
+완료된 구현 단계. 미완료 Phase (4.8~9) 로드맵은 [project_plan.md](../project_plan.md) 섹션 4 참조.
 
 | Phase | 내용 | 위험도 | 상태 |
 |-------|------|--------|------|
@@ -344,7 +351,430 @@ python auto_install/main.py <installer_folder_path>
 | 2 | 로직 버그 수정 + 구버전 파일 삭제 | 중간 | ✅ 완료 |
 | 3 | ClassifyTool.exe → DIE(`diec.exe`) 교체 | 높음 | ✅ 완료 |
 | 3.5 | 추가 버그 수정 (silent_mode, excluded_paths, zip 라우팅, shutil.move 등) | 중간 | ✅ 완료 |
-| 4 | Tool/ 디렉토리 정리 | 낮음 | ⏳ 예정 |
+| 4 | 설치 안정성 개선 (Phase 4 상세 참조) | 높음 | ✅ 완료 |
+| 4.5 | 코드 품질 — logging 모듈 도입, 미사용 상수 제거, 데드코드 정리 | 낮음 | ✅ 완료 |
+| 4.6 | 리포트 — install_summary.csv 기본 리포트 추가 | 낮음 | ✅ 완료 |
+| 4.7 | 즉시·단기 버그 수정 (Phase 4.7 상세 참조) | 낮음 | ✅ 완료 |
+
+---
+
+## Phase 4 상세 — 설치 안정성 개선 ✅ 완료
+
+Phase 1~3.5에서 구조 정리와 DIE 교체는 완료되었지만, 실제 대량 설치 실행에서는 아래 문제가 우선적으로 남아 있다.
+
+### 4.1 파일시스템 모니터링 — move 금지, copy + manifest로 변경 ✅ 완료
+
+- 원본 파일은 이동하지 않고 `C:\Data\collected\<installer_name>\...` 아래로 복사.
+- manifest에 원본 경로, 복사 경로, 타입, 상태, 오류, 시각 기록.
+- **추가**: worker 스레드로 큐를 실시간 드레인 → 설치 중에도 파일이 즉시 복사됨.
+
+### 4.2 silent mode — MSI는 `msiexec.exe`로 분리 ✅ 완료
+
+- `msiexec.exe /i <file> /qn /norestart` 사용.
+- 반환코드 `3010`(재부팅 필요)도 성공으로 처리.
+
+### 4.3 cleanup — 파일명 키워드 종료 최소화 ✅ 완료
+
+- `terminate_installation_process(pid, file_path)` — PID가 있으면 PID 기반, 없을 때만 키워드 fallback.
+
+### 4.4 GUI 성공 판정 — 강제 종료 성공을 설치 성공으로 보지 않음 ✅ 완료
+
+- `clicked_completion AND process_exited` 두 조건 모두 충족 시에만 성공.
+- 강제 종료는 cleanup 전용.
+- DANGER_KEYWORDS("uninstall", "remove", "restart now" 등) 버튼은 클릭 건너뜀.
+- `check_checkbox`: 상태 확인 후 unchecked일 때만 클릭.
+- `step` 변수 섀도잉 버그 수정 (`for i in range(step)`).
+- 중복 창 핸들 기반으로 제거.
+
+### 4.5 경로 처리 — 실행 위치 독립화 ✅ 완료 (Phase 3.5)
+
+- `Path(__file__).resolve()` 기반 `PROJECT_ROOT`, `PACKAGE_DIR`.
+- `excluded_paths`는 `DIEC_EXE`, `SEVEN_ZIP_EXE`, `DATA_FOLDER`, `PACKAGE_DIR` 기반.
+
+---
+
+## Phase 4.7 — 즉시·단기 버그 수정 ✅ 완료
+
+| 문제 | 위치 | 수정 내용 |
+|------|------|-----------|
+| `_drain_queue` 레이스 컨디션 — stop_event 설정 후 큐 잔여 이벤트 유실 | `filesystem_monitor.py` | `while True` + Empty 시 stop_event 확인으로 교체. 큐가 완전히 비워진 후에만 worker 종료 |
+| `[zip_failed]` 오기록 — 추출 미시도 타입도 실패로 기록 | `main.py` | `EXTRACTABLE_TYPES` 확인 후 실제 시도한 경우에만 `note_file_txt` 호출 |
+| `.exe`/`.msi` 외 파일에 `diec.exe` 호출 낭비 | `main.py` | `PROCESSABLE_EXTENSIONS` 사전 필터로 비-PE 파일 즉시 skip |
+| Resume 기능 없음 — 중단 시 처음부터 재시작 | `main.py` | `load_completed_files()` — 이전 CSV의 success 파일은 건너뜀 |
+| CSV 리포트에 실행 구분자 없음 | `main.py` | `run_id` (YYYYMMDD_HHMMSS) 필드 추가 |
+| `close_windows()` DANGER 버튼 미필터 | `utils.py` | `DANGER_KEYWORDS` 필터 적용 |
+| `DANGER_KEYWORDS` 중복 정의 | `gui_install.py` | `config.py`로 이동, gui_install에서 import |
+| `terminate_installation_process` 미사용 데드코드 | `utils.py` | 제거 |
+| `click_button` `"continue"` 중복 | `gui_install.py` | 중복 제거 |
+| `EXTRACTABLE_TYPES`, `PROCESSABLE_EXTENSIONS`, `DANGER_KEYWORDS` 파일 내 중복 정의 | 여러 파일 | `config.py`로 통합 |
+
+---
+
+## Phase 4.8 상세 — GUI 설치 단계 개선 ⏳ 예정
+
+> 문제점 분류(Category A~D) 및 배경은 [project_plan.md](../project_plan.md) 섹션 3-1 참조.
+
+### Category A — RadioButton 처리 실패
+
+**근본 원인**
+
+현재 `check_radiobutton()`은 "agree" 키워드 일치 시 즉시 클릭 후 `return`한다.
+License Agreement 페이지에는 항상 두 버튼이 공존한다:
+
+```
+○ I agree to the terms        ← 클릭해야 함
+○ I do not agree to the terms ← 절대 클릭하면 안 됨
+```
+
+탐색 순서에 따라 "I do not agree"가 먼저 나오면 아무것도 클릭 안 하고 종료된다.
+Setup Factory 케이스에서는 agree → disagree 이중 클릭이 발생하기도 했다:
+> "radiobutton도 for 문으로 돌아서 agree 하고 다시 disagree버튼을 눌러버림" (except.md)
+
+**해결 — DISAGREE_KEYWORDS 추가**
+
+```python
+# config.py에 추가
+DISAGREE_KEYWORDS_RADIO = [
+    "do not agree", "disagree", "decline", "not accept",
+    "동의하지 않", "동의 안 함", "거부",
+    "ablehnen", "nicht akzeptieren", "stimme nicht zu",
+]
+
+# gui_install.py check_radiobutton() 개선
+def check_radiobutton(window):
+    agree_candidate = None  # 즉시 클릭하지 않고 저장
+    try:
+        for radiobutton in window.descendants(control_type="RadioButton"):
+            text = radiobutton.window_text().lower()
+            logger.debug("RadioButton: %s", text)
+
+            if any(k in text for k in DISAGREE_KEYWORDS_RADIO):
+                logger.info("Skipping disagree radiobutton: %s", text)
+                continue
+
+            if any(k in text for k in AGREE_KEYWORDS):
+                agree_candidate = radiobutton  # 마지막 agree 후보 저장
+
+        if agree_candidate:
+            agree_candidate.click()
+            logger.info("Clicked agree radiobutton: %s", agree_candidate.window_text())
+
+    except Exception as e:
+        logger.warning("RadioButton handling error: %s", e)
+```
+
+"agree 후보를 저장 후 한 번만 클릭"으로 이중 클릭 버그도 동시에 방지한다.
+
+---
+
+### Category B — UI 구성요소 접근 불가
+
+**근본 원인 3가지**
+
+```
+원인 1: 구형 Win32 Controls
+  NSIS < 3.x, 구형 InstallShield, Vobsub, starcodec
+  → UIA가 접근하는 COM 인터페이스가 구현되지 않음
+  → Win32 메시지(WM_CLICK, BM_CLICK) 기반 접근 필요
+
+원인 2: Custom-drawn Controls
+  COMODO, DWG FastView, Magic Pic2Ani
+  → 표준 컨트롤이 아니므로 UIA/Win32 모두 인식 못 함
+  → 화면 좌표 기반 접근이 유일한 수단
+
+원인 3: 권한 레벨 불일치
+  UAC 이후 elevated 프로세스의 창
+  → 관리자 권한 실행으로 해결 (is_admin() 체크 이미 적용됨)
+```
+
+**해결 1 — Win32 백엔드 fallback**
+
+pywinauto의 `win32` 백엔드는 UIA 대신 Win32 메시지를 직접 전송한다.
+UIA가 실패하는 구형 컨트롤에서 효과적이다.
+
+```python
+# gui_install.py 구조 변경
+def gui_install(file_path, step=20):
+    # 1차 시도: UIA 백엔드 (현행)
+    result = _try_gui_install(file_path, backend="uia", step=step)
+    if result:
+        return True
+
+    logger.info("UIA failed, retrying with Win32 backend: %s", file_path)
+
+    # 2차 시도: Win32 백엔드
+    return _try_gui_install(file_path, backend="win32", step=step)
+```
+
+Win32 백엔드에서 달라지는 API:
+- `window.descendants(control_type="Button")` → `window.children(class_name="Button")`
+- `button.click_input()` → `button.click()` (메시지 기반)
+
+**해결 2 — 키보드 네비게이션 fallback**
+
+UI 요소는 잡히는데 마우스 클릭이 안 되는 경우(Vobsub 등), 키보드로 우회한다.
+
+```python
+import pyautogui
+
+def try_keyboard_navigation(window):
+    try:
+        window.set_focus()
+        for _ in range(5):      # Tab으로 포커스 이동
+            pyautogui.press('tab')
+            time.sleep(0.1)
+        pyautogui.press('enter') # 포커스 컨트롤 활성화
+        logger.info("Keyboard navigation attempted")
+    except Exception as e:
+        logger.warning("Keyboard navigation failed: %s", e)
+```
+
+**해결 3 — OCR fallback (마지막 수단)**
+
+COMODO, DWG FastView처럼 UIA/Win32 모두 실패하는 custom UI는 화면 좌표 기반으로 접근한다.
+
+```python
+# pip install pyautogui pytesseract pillow
+import pyautogui, pytesseract
+
+BUTTON_KEYWORDS_OCR = ["ok", "next", "install", "finish", "yes", "다음", "설치", "확인", "마침"]
+
+def ocr_click_button() -> bool:
+    screenshot = pyautogui.screenshot()
+    data = pytesseract.image_to_data(
+        screenshot, lang="kor+eng", output_type=pytesseract.Output.DICT
+    )
+    for i, word in enumerate(data['text']):
+        if not word.strip():
+            continue
+        if any(k in word.lower() for k in BUTTON_KEYWORDS_OCR):
+            conf = int(data['conf'][i])
+            if conf > 60:  # 신뢰도 임계값
+                x = data['left'][i] + data['width'][i] // 2
+                y = data['top'][i] + data['height'][i] // 2
+                pyautogui.click(x, y)
+                logger.info("OCR clicked: '%s' at (%d, %d)", word, x, y)
+                return True
+    return False
+```
+
+OCR 한계: 해상도 의존(1920×1080 기준), 한국어 인식률 상대적으로 낮음, disabled 버튼 구분 불가.
+UIA/Win32 모두 실패한 케이스의 마지막 수단으로만 사용한다.
+
+---
+
+### Category C — 윈도우 자체를 못 잡음
+
+**근본 원인**
+
+현재 `get_install_windows()`는 창 제목에 "setup", "install" 등 키워드가 있는 창만 가져온다.
+실패하는 경우:
+
+```
+케이스 1: 자식 프로세스가 창을 생성
+  app.windows() → 부모 프로세스 창만 반환, 자식 창 누락
+
+케이스 2: 창 제목이 제품명만인 경우
+  "Sibelius 7", "Cool Edit Pro 2.1" — install 키워드 없음
+
+케이스 3: Language Selection 팝업
+  설치 시작 전 나오는 첫 번째 다이얼로그 (키워드 없음)
+```
+
+**해결 — 프로세스 트리 기반 창 탐색**
+
+창 제목 키워드 대신 PID를 기준으로 모든 창을 찾는다.
+(`pywin32` 패키지 필요: `pip install pywin32`)
+
+```python
+import win32gui
+import win32process
+
+def get_all_windows_for_process_tree(root_pid: int) -> list:
+    """설치파일 프로세스 트리에 속한 모든 창을 반환한다."""
+    try:
+        proc = psutil.Process(root_pid)
+        pid_set = {root_pid} | {c.pid for c in proc.children(recursive=True)}
+    except psutil.NoSuchProcess:
+        return []
+
+    result = []
+
+    def _enum_callback(hwnd, _):
+        if not win32gui.IsWindowVisible(hwnd):
+            return
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        if pid in pid_set:
+            try:
+                app_ref = Application(backend="uia")
+                ctrl = app_ref.window(handle=hwnd)
+                result.append(ctrl)
+            except Exception:
+                pass
+
+    win32gui.EnumWindows(_enum_callback, None)
+    return result
+```
+
+창 제목과 무관하게 설치파일이 만든 모든 창을 캡처한다.
+기존 `get_install_windows()` 키워드 탐색과 병합해서 사용한다.
+
+---
+
+### Category D — 설치 후 프로그램 자동 실행
+
+**근본 원인**
+
+```python
+process_exited = not psutil.pid_exists(pid)
+if clicked_completion and process_exited:
+    return True
+```
+
+설치 완료 후 프로그램이 자동 실행되면:
+- 설치파일 프로세스(`pid`)는 종료 → `process_exited=True`
+- 하지만 새 프로세스가 남아 다음 설치 환경을 오염
+- 일부 케이스는 설치파일이 업데이터를 자식으로 스폰 후 종료 → 자식이 계속 실행 중
+
+**해결 — 설치 전 PID 스냅샷 + 설치 후 신규 프로세스 종료**
+
+```python
+def gui_install(file_path, step=20):
+    # 설치 시작 전 실행 중인 모든 PID 기록
+    before_pids = set(psutil.pids())
+
+    app = Application(backend="uia").start(file_path)
+    pid = app.process
+
+    # ... 설치 루프 ...
+
+    # 설치 완료 후: 새로 생긴 프로세스를 종료
+    after_pids = set(psutil.pids())
+    new_pids = after_pids - before_pids - {pid}
+    for new_pid in new_pids:
+        try:
+            p = psutil.Process(new_pid)
+            logger.info("Terminating post-install process: %s (pid=%d)", p.name(), new_pid)
+            terminate_process_tree(new_pid)
+        except psutil.NoSuchProcess:
+            pass
+```
+
+---
+
+### 고정 루프 → 이벤트 기반 대기
+
+현재 구조의 근본 한계:
+
+```
+현재: step × sleep(3) = 최소 60초 고정
+  → 화면 전환이 2초 만에 끝나도 3초 대기
+  → 설치가 10초 걸리면 다음 스텝에서 뒤늦게 처리
+```
+
+CPU 안정화 대기로 교체하면 설치 속도에 동적으로 적응한다 (개선 2, 이미 설계됨).
+추가로 창 제목 변경을 감지해 화면 전환 시점을 정확히 포착할 수 있다:
+
+```python
+def wait_for_window_change(pid: int, current_titles: set, timeout=15) -> bool:
+    """창 제목이 바뀔 때까지 대기한다."""
+    start = time.time()
+    while time.time() - start < timeout:
+        time.sleep(0.5)
+        try:
+            new_titles = {w.window_text() for w in get_all_windows_for_process_tree(pid)}
+            if new_titles != current_titles:
+                return True
+        except Exception:
+            pass
+    return False
+```
+
+---
+
+### 개선 후 아키텍처
+
+```
+[현재]
+gui_install()
+  └── for step in range(20):              ← 고정 60초
+        sleep(3)
+        app.windows() + 키워드 필터       ← 제목 기반, 자식 누락
+        click_button()                    ← UIA만
+        check_radiobutton()               ← agree 탐색만
+        check_checkbox()                  ← 첫 번째만
+        wait_for_progress(timeout=30)     ← 고정
+
+[개선 후]
+gui_install()
+  ├── before_pids = snapshot()            ← 신규 프로세스 추적
+  ├── 1차: UIA 백엔드
+  │     └── _install_loop()
+  │           ├── get_all_windows_for_process_tree()   ← PID 기반
+  │           ├── wait_for_cpu_idle() or wait_for_window_change()
+  │           ├── click_button()
+  │           ├── check_radiobutton()     ← DISAGREE_KEYWORDS 추가
+  │           ├── check_checkbox()        ← 전체 순회
+  │           └── wait_for_progress()
+  ├── [실패 시] 2차: Win32 백엔드         ← 구형 컨트롤 대응
+  ├── [실패 시] 3차: OCR fallback         ← custom UI 대응
+  └── 완료 후: 신규 프로세스 종료         ← 설치 후 실행 프로그램 정리
+```
+
+---
+
+### 우선순위별 구현 계획
+
+| 우선순위 | 항목 | 예상 효과 | 구현 난이도 | 필요 패키지 |
+|---------|------|----------|------------|------------|
+| 1 | RadioButton DISAGREE_KEYWORDS 추가 | 높음 (가장 빈번한 실패) | 낮음 | 없음 |
+| 2 | 설치 전후 PID 스냅샷 + 신규 프로세스 종료 | 높음 (오탐 제거) | 낮음 | 없음 (psutil 기존 사용) |
+| 3 | `check_checkbox` 전체 순회로 수정 (`break` 위치 조정) | 중간 | 낮음 | 없음 |
+| 4 | Win32 백엔드 fallback | 높음 (구형 컨트롤 대응) | 중간 | 없음 (pywinauto 기존 사용) |
+| 5 | PID 트리 기반 창 탐색 | 중간 (자식 프로세스 캡처) | 중간 | `pywin32` |
+| 6 | CPU-idle 기반 적응형 대기 | 중간 (속도 개선) | 중간 | 없음 (psutil 기존 사용) |
+| 7 | OCR fallback | 낮음 (마지막 수단) | 높음 | `pyautogui`, `pytesseract` |
+
+우선순위 1~3은 코드 수정만으로 즉시 적용 가능하며, except.md에 반복 기록된 케이스의 과반을 해결할 것으로 예상한다.
+
+---
+
+## backup/ 검토 결과 — Phase 5 반영 대상
+
+`backup/` 및 `backup/Tool/`에는 과거 실험 문서, 로그, 비교 CSV, 임시 스크립트가 남아 있다. 대부분은 현 코드에 직접 병합하기보다 **검증 기준과 리포트 기능**으로 재구성하는 것이 맞다.
+
+### 확인된 과거 업무 이력
+
+| 항목 | 근거 파일 | 현재 반영 방향 |
+|------|-----------|----------------|
+| NSIS 압축해제 실험 | `backup/NSIS-ZIP-Test.md`, `backup/Tool/extract-archive.py`, `backup/Tool/NSIS-compare-zip1.csv` | 압축해제 성공 여부만 보지 않고 SHA-256/PE 매칭률로 품질 검증 |
+| 7z installer 압축해제 한계 | `backup/Tool/7z-installer-compare-zip.csv` | 7z 추출 성공 후에도 설치 결과와 불일치할 수 있음을 리포트 |
+| CAPE 단독 수집 한계 | `backup/summary.md`, `backup/Tool/README.md` | CAPE는 보조 비교 기준으로만 사용, 주 수집은 VM 내 copy+manifest |
+| SHA-256 비교 로직 | `backup/Tool/compare-folder.py`, `backup/Tool/hashcheck.py` | `tools/compare_collected_files.py` 형태로 재작성 |
+| 설치 타입별 silent 성공률 | `backup/summary.md`, `backup/Tool/test.md` | installer type별 성공률/실패 사유 리포트 추가 |
+| GUI 자동화 케이스 기록 | `backup/summary.md`의 test-sample case | 버튼/체크박스/라디오/프로그레스 처리 정책 문서화 및 테스트 케이스화 |
+| CAPE API 초안 | `backup/Tool/cape-api.py`, `backup/Tool/folder-copy.py` | 즉시 제품 코드화하지 않고 optional integration 후보로 유지 |
+
+### 주요 결론
+
+1. **압축해제 성공 = 설치 산출물 확보 성공이 아님**
+   - NSIS는 일부 샘플에서 높은 매칭률을 보였지만, 다운로드러/번들러/중첩 설치파일 케이스는 압축해제 산출물과 실제 설치 산출물이 크게 다르다.
+   - `verify_folder()`의 “인스톨러 파일 2개 이상이면 의심” 로직은 계속 유지하되, 최종 판단은 파일 hash/PE 매칭률로 보강한다.
+
+2. **CAPE만으로는 목표 산출물 확보가 부족함**
+   - 과거 NSIS 실험에서 CAPE 결과만으로는 설치 파일 확보율이 낮았다.
+   - CAPE는 자동 설치 대체재가 아니라 비교/보조 수집 경로로 둔다.
+
+3. **installer type별 전략이 달라야 함**
+   - Inno Setup/Wise는 silent 성공률이 상대적으로 높았다.
+   - InstallShield/Setup Factory/BitRock/QT 등은 silent 실패와 GUI fallback 가능성을 전제로 해야 한다.
+   - MSI는 `msiexec` 분리가 필수이며, embedded MSI/추가 MSI 팝업 케이스를 별도 기록해야 한다.
+
+4. **GUI 자동화는 버튼명 리스트만으로 부족함**
+   - 과거 케이스에 checkbox, radiobutton, scroll, progressbar, 실행 체크박스 해제 등이 반복적으로 등장한다.
+   - `click list`와 함께 `dontclick list`, 완료 버튼, 실행 옵션 checkbox 해제 정책을 분리해야 한다.
+
+Phase 5/6 세부 계획은 [project_plan.md](../project_plan.md) 섹션 4 중기 참조.
 
 ---
 
