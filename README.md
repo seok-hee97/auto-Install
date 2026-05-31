@@ -1,16 +1,44 @@
 # auto-Install
 
-Automated Windows installer processing pipeline. Classifies installer types, extracts archives, runs silent installs, and falls back to GUI automation to collect installed program files.
+Batch automation for Windows `.exe`/`.msi` installers — classify, silent install, GUI fallback.
 
 ## Overview
 
-Processes `.exe` / `.msi` installer files through three sequential stages:
+Given a folder of installer files, auto-Install processes each one through three sequential stages:
 
-1. **Archive extraction** — Extracts NSIS, MSI, and 7z-packaged installers using 7-Zip
-2. **Silent install** — Runs installers with type-specific silent flags (`/S`, `/VERYSILENT`, `/qn`, etc.)
-3. **GUI automation** — Automates install wizards via pywinauto when silent mode is unavailable
+1. **Classify** — Identifies the installer framework (Inno Setup, NSIS, MSI, etc.) using [DIE](https://github.com/horsicq/Detect-It-Easy)
+2. **Silent install** — Runs the installer with the appropriate silent flag (`/VERYSILENT`, `/S`, `/qn`, etc.)
+3. **GUI automation** — If silent mode fails or is unavailable, automates the install wizard via [pywinauto](https://github.com/pywinauto/pywinauto)
 
 Newly installed files are detected via filesystem monitoring (watchdog) and collected to `C:\Data\`.
+
+## Project Structure
+
+```
+auto-Install/
+├── auto_install/               # Main package
+│   ├── main.py                 # Entry point — orchestrates the full pipeline
+│   ├── config.py               # Paths, constants, installer type mappings
+│   ├── utils.py                # classify_installer(), terminate_process_tree(), etc.
+│   ├── silent_mode.py          # Silent install runner with polling-based window detection
+│   ├── gui_install.py          # pywinauto GUI automation (click, checkbox, radiobutton, OCR fallback)
+│   ├── filesystem_monitor.py   # watchdog-based file collection to C:\Data\collected\
+│   └── extract_zip.py          # 7-Zip archive extraction for NSIS/MSI/7z installers
+├── tools/
+│   ├── snapshot_diff.py        # Pre/post install filesystem diff (Phase 8)
+│   ├── vm_controller.py        # Hyper-V / VirtualBox snapshot automation (Phase 7)
+│   └── compare_collected_files.py  # SHA-256 comparison of collected vs. reference files
+├── tests/                      # pytest test suite (138 tests, cross-platform mocks)
+│   ├── conftest.py             # Windows-only package mocks (pywinauto, win32gui, watchdog, etc.)
+│   ├── test_config.py
+│   ├── test_utils.py
+│   ├── test_filesystem_monitor.py
+│   ├── test_silent_mode.py
+│   ├── test_gui_install.py
+│   └── test_main.py
+├── requirements.txt
+└── LICENSE
+```
 
 ## Requirements
 
