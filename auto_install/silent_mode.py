@@ -5,8 +5,12 @@ import time
 
 from pywinauto import Desktop
 
-from config import SILENT_COMMANDS, PASS_WINDOW, INSTALLATION_KEYWORDS
-from utils import set_windows_error_mode, terminate_process_tree, close_windows
+try:
+    from auto_install.config import SILENT_COMMANDS, PASS_WINDOW, INSTALLATION_KEYWORDS
+    from auto_install.utils import set_windows_error_mode, terminate_process_tree, close_windows
+except ImportError:
+    from config import SILENT_COMMANDS, PASS_WINDOW, INSTALLATION_KEYWORDS
+    from utils import set_windows_error_mode, terminate_process_tree, close_windows
 
 # Windows-only subprocess flag; falls back to 0 on non-Windows
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)

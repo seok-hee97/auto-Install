@@ -6,11 +6,18 @@ from pywinauto import Desktop
 from pywinauto import Application
 import psutil
 
-from config import (
-    DANGER_KEYWORDS, DISAGREE_KEYWORDS_RADIO, AGREE_KEYWORDS,
-    PASS_WINDOW, INSTALLATION_KEYWORDS,
-)
-from utils import set_windows_error_mode, terminate_process_tree, close_windows
+try:
+    from auto_install.config import (
+        DANGER_KEYWORDS, DISAGREE_KEYWORDS_RADIO, AGREE_KEYWORDS,
+        PASS_WINDOW, INSTALLATION_KEYWORDS,
+    )
+    from auto_install.utils import set_windows_error_mode, terminate_process_tree, close_windows
+except ImportError:
+    from config import (
+        DANGER_KEYWORDS, DISAGREE_KEYWORDS_RADIO, AGREE_KEYWORDS,
+        PASS_WINDOW, INSTALLATION_KEYWORDS,
+    )
+    from utils import set_windows_error_mode, terminate_process_tree, close_windows
 
 logger = logging.getLogger(__name__)
 

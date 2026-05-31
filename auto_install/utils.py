@@ -9,10 +9,16 @@ import ctypes
 from pywinauto import Desktop
 import psutil
 
-from config import (
-    DIEC_EXE, INSTALLER_TYPE_LIST, DIE_INSTALLER_MAP, DIE_SFX_MAP,
-    LOG_FILE, DANGER_KEYWORDS, PASS_WINDOW,
-)
+try:
+    from auto_install.config import (
+        DIEC_EXE, INSTALLER_TYPE_LIST, DIE_INSTALLER_MAP, DIE_SFX_MAP,
+        LOG_FILE, DANGER_KEYWORDS, PASS_WINDOW,
+    )
+except ImportError:
+    from config import (
+        DIEC_EXE, INSTALLER_TYPE_LIST, DIE_INSTALLER_MAP, DIE_SFX_MAP,
+        LOG_FILE, DANGER_KEYWORDS, PASS_WINDOW,
+    )
 
 logger = logging.getLogger(__name__)
 

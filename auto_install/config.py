@@ -114,12 +114,10 @@ SILENT_COMMANDS = {
     "Ghost installer": ["/S"],
     "Inno Setup": ["/VERYSILENT", "/SUPPRESSMSGBOXES"],
     "InstallShield": ["/s"],
-    "Microsoft Installer(MSI)": ["/qn"],
     "NSIS": ["/S"],
     "QT installer": ["--accept-licenses", "--default-answer", "--confirm-command", "install"],
     "Setup Factory": ["/S"],
     "Sony Windows installer": ["/q"],
-    "Windows Installer": ["/qn"],
     "Wise Installer": ["/s"],
     "WIX Toolset installer": ["/q"]
 }

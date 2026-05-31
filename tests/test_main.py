@@ -1,11 +1,17 @@
 """Tests for main.py — load_completed_files, parallel_zip_phase, _zip_worker."""
 import csv
+import importlib
 import os
 import datetime
 import pytest
 from unittest.mock import MagicMock, patch
 
 from main import load_completed_files, _zip_worker, parallel_zip_phase, write_report
+
+
+def test_package_module_import_supported():
+    module = importlib.import_module("auto_install.main")
+    assert hasattr(module, "main")
 
 
 # ---------------------------------------------------------------------------

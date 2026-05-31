@@ -1,6 +1,6 @@
 # auto-Install
 
-Batch automation for Windows `.exe`/`.msi` installers — classify, silent install, GUI fallback.
+Batch automation for Windows `.exe`/`.msi` installers — classify, silent install, GUI fallback, and isolated VM execution.
 
 ## Overview
 
@@ -12,12 +12,14 @@ Given a folder of installer files, auto-Install processes each one through three
 
 Newly installed files are detected via filesystem monitoring (watchdog) and collected to `C:\Data\`.
 
+For real batch automation, run installers inside a Windows guest VM through the host-side orchestrator. The host restores a clean snapshot, copies the project and installer set into the guest, executes `auto_install.main` inside the guest, then copies the result archive back to the host.
+
 ## Project Structure
 
 ```
 auto-Install/
 ├── auto_install/               # Main package
-│   ├── main.py                 # Entry point — orchestrates the full pipeline
+│   ├── main.py                 # Guest worker — runs the install pipeline inside Windows
 │   ├── config.py               # Paths, constants, installer type mappings
 │   ├── utils.py                # classify_installer(), terminate_process_tree(), etc.
 │   ├── silent_mode.py          # Silent install runner with polling-based window detection
@@ -26,9 +28,15 @@ auto-Install/
 │   └── extract_zip.py          # 7-Zip archive extraction for NSIS/MSI/7z installers
 ├── tools/
 │   ├── snapshot_diff.py        # Pre/post install filesystem diff (Phase 8)
-│   ├── vm_controller.py        # Hyper-V / VirtualBox snapshot automation (Phase 7)
+│   ├── vm_controller.py        # Legacy snapshot helper kept for compatibility
 │   └── compare_collected_files.py  # SHA-256 comparison of collected vs. reference files
-├── tests/                      # pytest test suite (138 tests, cross-platform mocks)
+├── host_runner/                # Host-side VM orchestration
+│   ├── orchestrator.py         # Restore/start VM, run guest worker, collect results
+│   └── backends/
+│       ├── base.py             # VMBackend interface
+│       ├── hyperv.py           # Hyper-V + PowerShell Direct backend
+│       └── virtualbox.py       # VirtualBox guestcontrol backend
+├── tests/                      # pytest test suite (149 tests, cross-platform mocks)
 │   ├── conftest.py             # Windows-only package mocks (pywinauto, win32gui, watchdog, etc.)
 │   ├── test_config.py
 │   ├── test_utils.py
@@ -56,13 +64,49 @@ pip install -r requirements.txt
 
 ## Usage
 
-Run as Administrator:
+### Direct Guest Run
+
+Run this inside the Windows guest as Administrator:
 
 ```bash
-python auto_install/main.py <path_to_installer_folder>
+python -m auto_install.main <path_to_installer_folder>
 ```
 
 Logs of failed files are written to `C:\Data\log_files.txt`.
+
+`auto_install.main` is the guest worker. It no longer performs VM restore/start/stop itself. The old `--vm-name` option is deprecated and refuses to run installers on the host to prevent accidental host contamination.
+
+### Host VM Run
+
+Run this from the host:
+
+```bash
+python -m host_runner.orchestrator \
+  --backend hyperv \
+  --vm-name AutoInstall \
+  --snapshot Clean-State \
+  --input ./samples \
+  --out ./results
+```
+
+The orchestrator performs:
+
+1. Restore VM snapshot
+2. Start VM
+3. Copy the project archive and installer input into `C:\AutoInstall`
+4. Run `C:\AutoInstall\venv\Scripts\python.exe -m auto_install.main C:\AutoInstall\input`
+5. Compress guest results from `C:\Data`
+6. Copy `guest_result.zip` and `host_run.json` back to the host output directory
+7. Stop VM
+
+Host result layout:
+
+```text
+results/
+└── <run_id>/
+    ├── guest_result.zip
+    └── host_run.json
+```
 
 ## Supported Installer Types
 
@@ -95,7 +139,27 @@ Running against unknown installers carries risk. Use an isolated VM:
 | Batch processing | Hyper-V + snapshot (Windows Pro, free) |
 | Cross-platform host | VirtualBox or VMware |
 
-Hyper-V snapshot automation example:
+### Guest VM Preparation
+
+Inside the Windows guest:
+
+- Install Python and create `C:\AutoInstall\venv`
+- Install project dependencies into that venv
+- Install 7-Zip at `C:\Program Files\7-Zip\7z.exe`
+- Install DIE at `C:\Program Files\DIE\diec.exe`
+- Run automation under an Administrator account
+- Disable UAC prompts in the disposable VM if GUI automation must cross elevated installers
+
+For Hyper-V PowerShell Direct, set guest credentials on the host:
+
+```powershell
+$env:AUTOINSTALL_GUEST_USERNAME = "Administrator"
+$env:AUTOINSTALL_GUEST_PASSWORD = "<guest-password>"
+```
+
+For VirtualBox, install Guest Additions and set the same environment variables. You can also set `VBOXMANAGE_EXE` if `VBoxManage` is not on `PATH`.
+
+Hyper-V manual snapshot commands:
 
 ```powershell
 Restore-VMCheckpoint -VMName "AutoInstall" -Name "Clean-State"

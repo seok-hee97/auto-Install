@@ -2,7 +2,10 @@ import logging
 import os
 import subprocess
 
-from config import SEVEN_ZIP_EXE
+try:
+    from auto_install.config import SEVEN_ZIP_EXE
+except ImportError:
+    from config import SEVEN_ZIP_EXE
 
 logger = logging.getLogger(__name__)
 

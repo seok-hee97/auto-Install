@@ -8,24 +8,37 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from config import (
-    SYS_DRIVE, DATA_FOLDER, SEVEN_ZIP_EXE, DIEC_EXE,
-    PACKAGE_DIR, MANIFEST_FILE, COLLECTED_FOLDER,
-    PROCESSABLE_EXTENSIONS, EXTRACTABLE_TYPES,
-    setup_logging,
-)
-from extract_zip import extract_archive
-from silent_mode import run_silent_install
-from gui_install import gui_install
-from filesystem_monitor import start_monitoring, stop_monitoring
-from utils import classify_installer, verify_folder, note_file_txt
+try:
+    from auto_install.config import (
+        SYS_DRIVE, DATA_FOLDER, SEVEN_ZIP_EXE, DIEC_EXE,
+        PACKAGE_DIR, MANIFEST_FILE, COLLECTED_FOLDER,
+        PROCESSABLE_EXTENSIONS, EXTRACTABLE_TYPES,
+        setup_logging,
+    )
+    from auto_install.extract_zip import extract_archive
+    from auto_install.silent_mode import run_silent_install
+    from auto_install.gui_install import gui_install
+    from auto_install.filesystem_monitor import start_monitoring, stop_monitoring
+    from auto_install.utils import classify_installer, verify_folder, note_file_txt
+except ImportError:
+    from config import (
+        SYS_DRIVE, DATA_FOLDER, SEVEN_ZIP_EXE, DIEC_EXE,
+        PACKAGE_DIR, MANIFEST_FILE, COLLECTED_FOLDER,
+        PROCESSABLE_EXTENSIONS, EXTRACTABLE_TYPES,
+        setup_logging,
+    )
+    from extract_zip import extract_archive
+    from silent_mode import run_silent_install
+    from gui_install import gui_install
+    from filesystem_monitor import start_monitoring, stop_monitoring
+    from utils import classify_installer, verify_folder, note_file_txt
 
 logger = logging.getLogger(__name__)
 
 REPORTS_DIR = os.path.join(DATA_FOLDER, "reports")
 REPORT_PATH = os.path.join(REPORTS_DIR, "install_summary.csv")
 
-# tools/ 경로 추가 (Phase 7, 8 모듈 import)
+# tools/ 경로 추가 (snapshot_diff 모듈 import)
 _TOOLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools')
 if _TOOLS_DIR not in sys.path:
     sys.path.insert(0, _TOOLS_DIR)
@@ -36,13 +49,6 @@ try:
     _SNAPSHOT_DIFF_AVAILABLE = True
 except ImportError:
     _SNAPSHOT_DIFF_AVAILABLE = False
-
-# Phase 7: vm_controller
-try:
-    from vm_controller import VMSession
-    _VM_CONTROLLER_AVAILABLE = True
-except ImportError:
-    _VM_CONTROLLER_AVAILABLE = False
 
 
 def is_admin():
@@ -196,10 +202,18 @@ def parallel_zip_phase(file_paths: list, run_id: str, max_workers: int) -> tuple
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def main(path, workers=1, snapshot_diff=False, vm_name='', vm_snapshot='Clean-State',
-         vm_backend='hyperv', vm_boot_wait=30):
+def main(path, workers=1, snapshot_diff=False, run_id=None, vm_name='',
+         vm_snapshot='Clean-State', vm_backend='hyperv', vm_boot_wait=30):
 
     setup_logging()
+
+    if vm_name:
+        logger.error(
+            "--vm-name is deprecated in auto_install.main. Use "
+            "python -m host_runner.orchestrator for real guest VM execution. "
+            "Refusing to run installers on the host."
+        )
+        return
 
     if not is_admin():
         logger.warning("경고: 관리자 권한으로 실행하지 않으면 UAC 팝업 처리가 불가능합니다.")
@@ -208,14 +222,7 @@ def main(path, workers=1, snapshot_diff=False, vm_name='', vm_snapshot='Clean-St
         logger.warning("--snapshot-diff 요청됐지만 snapshot_diff 모듈을 찾을 수 없습니다. 무시합니다.")
         snapshot_diff = False
 
-    # Phase 7: VM 모드 설정
-    use_vm = bool(vm_name) and _VM_CONTROLLER_AVAILABLE
-    if use_vm:
-        logger.info("VM 모드 활성화: %s / %s / backend=%s", vm_name, vm_snapshot, vm_backend)
-    elif vm_name and not _VM_CONTROLLER_AVAILABLE:
-        logger.warning("--vm-name 지정됐지만 vm_controller 모듈을 찾을 수 없습니다. VM 모드 비활성.")
-
-    run_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = run_id or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     completed_files = load_completed_files(REPORT_PATH)
     if completed_files:
         logger.info("Resume mode: %d files already completed, skipping them", len(completed_files))
@@ -319,47 +326,25 @@ def main(path, workers=1, snapshot_diff=False, vm_name='', vm_snapshot='Clean-St
                     'elapsed_sec': round(time.time() - _t0, 1),
                 })
 
-            # Phase 7: VM 모드 — 각 인스톨러를 clean state에서 실행
-            vm_ctx = VMSession(
-                enabled=use_vm,
-                vm_name=vm_name,
-                snapshot_name=vm_snapshot,
-                backend=vm_backend,
-                boot_wait=vm_boot_wait,
-            ) if use_vm else None
-            vm_ok = vm_ctx.__enter__() if vm_ctx else True
+            time.sleep(5)
 
-            if not vm_ok:
-                logger.error("VM 복원 실패, 건너뜀: %s", file_path)
-                _record("vm", "failed")
-                if vm_ctx:
-                    vm_ctx.__exit__(None, None, None)
+            if process_silent_mode(file_path, installer_type):
+                success_silent_cnt += 1
+                _record("silent", "success")
+                continue
+            note_file_txt(file_path, title='[silent_failed] : ')
+            _record("silent", "failed")
+            time.sleep(5)
+
+            if process_gui_install(file_path, installer_type, use_snapshot_diff=snapshot_diff):
+                success_gui_cnt += 1
+                _record("gui", "success")
                 continue
 
-            try:
-                time.sleep(5)
-
-                if process_silent_mode(file_path, installer_type):
-                    success_silent_cnt += 1
-                    _record("silent", "success")
-                    continue
-                note_file_txt(file_path, title='[silent_failed] : ')
-                _record("silent", "failed")
-                time.sleep(5)
-
-                if process_gui_install(file_path, installer_type, use_snapshot_diff=snapshot_diff):
-                    success_gui_cnt += 1
-                    _record("gui", "success")
-                    continue
-
-                note_file_txt(file_path, title='[gui_failed] : ')
-                _record("gui", "failed")
-                time.sleep(5)
-                logger.warning("All methods failed: %s", file_path)
-
-            finally:
-                if vm_ctx:
-                    vm_ctx.__exit__(None, None, None)
+            note_file_txt(file_path, title='[gui_failed] : ')
+            _record("gui", "failed")
+            time.sleep(5)
+            logger.warning("All methods failed: %s", file_path)
 
         logger.info("-------------------------------")
         logger.info("skipped (resumed)  : %d", skipped_cnt)
@@ -393,8 +378,12 @@ if __name__ == "__main__":
         help='Enable pre/post install filesystem diff via snapshot_diff (Phase 8)'
     )
     parser.add_argument(
+        '--run-id', default='',
+        help='Run identifier written to install_summary.csv'
+    )
+    parser.add_argument(
         '--vm-name', default='', metavar='NAME',
-        help='VM name for clean-state snapshot mode (Phase 7, requires vm_controller)'
+        help='Deprecated. Use python -m host_runner.orchestrator for VM execution.'
     )
     parser.add_argument(
         '--vm-snapshot', default='Clean-State', metavar='SNAPSHOT',
@@ -413,6 +402,7 @@ if __name__ == "__main__":
         args.path,
         workers=args.workers,
         snapshot_diff=args.snapshot_diff,
+        run_id=args.run_id,
         vm_name=args.vm_name,
         vm_snapshot=args.vm_snapshot,
         vm_backend=args.vm_backend,
