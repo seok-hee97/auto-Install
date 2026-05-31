@@ -39,11 +39,10 @@ except ImportError:
 
 # Phase 7: vm_controller
 try:
-    from vm_controller import VMSession, restore_snapshot, VM_MODE as _VM_MODE_ENV
+    from vm_controller import VMSession
     _VM_CONTROLLER_AVAILABLE = True
 except ImportError:
     _VM_CONTROLLER_AVAILABLE = False
-    _VM_MODE_ENV = False
 
 
 def is_admin():
@@ -212,11 +211,6 @@ def main(path, workers=1, snapshot_diff=False, vm_name='', vm_snapshot='Clean-St
     # Phase 7: VM 모드 설정
     use_vm = bool(vm_name) and _VM_CONTROLLER_AVAILABLE
     if use_vm:
-        import os as _os
-        _os.environ['AUTOINSTALL_VM_NAME'] = vm_name
-        _os.environ['AUTOINSTALL_VM_SNAPSHOT'] = vm_snapshot
-        _os.environ['AUTOINSTALL_VM_BACKEND'] = vm_backend
-        _os.environ['AUTOINSTALL_VM_MODE'] = '1'
         logger.info("VM 모드 활성화: %s / %s / backend=%s", vm_name, vm_snapshot, vm_backend)
     elif vm_name and not _VM_CONTROLLER_AVAILABLE:
         logger.warning("--vm-name 지정됐지만 vm_controller 모듈을 찾을 수 없습니다. VM 모드 비활성.")
@@ -326,7 +320,13 @@ def main(path, workers=1, snapshot_diff=False, vm_name='', vm_snapshot='Clean-St
                 })
 
             # Phase 7: VM 모드 — 각 인스톨러를 clean state에서 실행
-            vm_ctx = VMSession(vm_name, vm_snapshot, vm_boot_wait) if use_vm else None
+            vm_ctx = VMSession(
+                enabled=use_vm,
+                vm_name=vm_name,
+                snapshot_name=vm_snapshot,
+                backend=vm_backend,
+                boot_wait=vm_boot_wait,
+            ) if use_vm else None
             vm_ok = vm_ctx.__enter__() if vm_ctx else True
 
             if not vm_ok:

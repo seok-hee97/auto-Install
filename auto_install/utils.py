@@ -47,9 +47,9 @@ def close_windows(step: int = 5) -> None:
     logger.info("close_windows() start")
     clicks = [
         # eng
-        "cancel", "exit", "quit", "finish", "yes", "ok", 'x', "later", "close",
+        "cancel", "exit", "quit", "finish", "ok", "later", "close",
         # kor
-        "취소", "예", "예(Y)", "마침", "확인", "완료", "나중에"
+        "취소", "마침", "확인", "완료", "나중에"
     ]
 
     for i in range(step):

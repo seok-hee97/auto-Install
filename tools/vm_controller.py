@@ -24,7 +24,6 @@ import time
 
 logger = logging.getLogger(__name__)
 
-VM_MODE = os.environ.get('AUTOINSTALL_VM_MODE', '0') == '1'
 VM_NAME = os.environ.get('AUTOINSTALL_VM_NAME', '')
 VM_SNAPSHOT = os.environ.get('AUTOINSTALL_VM_SNAPSHOT', 'Clean-State')
 VM_BACKEND = os.environ.get('AUTOINSTALL_VM_BACKEND', 'hyperv').lower()
@@ -35,30 +34,41 @@ VBOXMANAGE = os.environ.get('VBOXMANAGE_EXE', 'VBoxManage')
 # Public API
 # ---------------------------------------------------------------------------
 
-def restore_snapshot(vm_name: str = VM_NAME, snapshot_name: str = VM_SNAPSHOT) -> bool:
+def _normalize_backend(backend: str = VM_BACKEND) -> str:
+    return (backend or VM_BACKEND).lower()
+
+
+def restore_snapshot(
+    vm_name: str = VM_NAME,
+    snapshot_name: str = VM_SNAPSHOT,
+    backend: str = VM_BACKEND,
+) -> bool:
     """VM을 지정 스냅샷 상태로 복원한다."""
-    if VM_BACKEND == 'hyperv':
+    backend = _normalize_backend(backend)
+    if backend == 'hyperv':
         return _hyperv_restore(vm_name, snapshot_name)
-    if VM_BACKEND == 'virtualbox':
+    if backend == 'virtualbox':
         return _vbox_restore(vm_name, snapshot_name)
-    logger.error("Unknown VM backend: %s", VM_BACKEND)
+    logger.error("Unknown VM backend: %s", backend)
     return False
 
 
-def start_vm(vm_name: str = VM_NAME, wait_sec: int = 30) -> bool:
+def start_vm(vm_name: str = VM_NAME, wait_sec: int = 30, backend: str = VM_BACKEND) -> bool:
     """VM을 시작하고 부팅 완료까지 대기한다."""
-    if VM_BACKEND == 'hyperv':
+    backend = _normalize_backend(backend)
+    if backend == 'hyperv':
         return _hyperv_start(vm_name, wait_sec)
-    if VM_BACKEND == 'virtualbox':
+    if backend == 'virtualbox':
         return _vbox_start(vm_name, wait_sec)
     return False
 
 
-def stop_vm(vm_name: str = VM_NAME) -> bool:
+def stop_vm(vm_name: str = VM_NAME, backend: str = VM_BACKEND) -> bool:
     """VM을 강제 종료한다."""
-    if VM_BACKEND == 'hyperv':
+    backend = _normalize_backend(backend)
+    if backend == 'hyperv':
         return _hyperv_stop(vm_name)
-    if VM_BACKEND == 'virtualbox':
+    if backend == 'virtualbox':
         return _vbox_stop(vm_name)
     return False
 
@@ -169,7 +179,7 @@ def _vbox_stop(vm_name: str) -> bool:
 class VMSession:
     """
     각 인스톨러를 독립된 clean state에서 실행하기 위한 컨텍스트 매니저.
-    VM_MODE=False 이면 no-op으로 동작한다.
+    enabled=False 이면 no-op으로 동작한다.
 
     Example:
         with VMSession() as ok:
@@ -179,25 +189,29 @@ class VMSession:
 
     def __init__(
         self,
+        enabled: bool = False,
         vm_name: str = VM_NAME,
         snapshot_name: str = VM_SNAPSHOT,
+        backend: str = VM_BACKEND,
         boot_wait: int = 30,
     ):
+        self.enabled = enabled
         self.vm_name = vm_name
         self.snapshot_name = snapshot_name
+        self.backend = _normalize_backend(backend)
         self.boot_wait = boot_wait
 
     def __enter__(self) -> bool:
-        if not VM_MODE:
+        if not self.enabled:
             return True
-        ok = restore_snapshot(self.vm_name, self.snapshot_name)
+        ok = restore_snapshot(self.vm_name, self.snapshot_name, self.backend)
         if ok:
-            ok = start_vm(self.vm_name, self.boot_wait)
+            ok = start_vm(self.vm_name, self.boot_wait, self.backend)
         return ok
 
     def __exit__(self, *_):
-        if VM_MODE:
-            stop_vm(self.vm_name)
+        if self.enabled:
+            stop_vm(self.vm_name, self.backend)
 
 
 # ---------------------------------------------------------------------------
@@ -219,18 +233,18 @@ def main():
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s [%(levelname)s] %(message)s")
-    os.environ['AUTOINSTALL_VM_BACKEND'] = args.backend
-
     if args.action == 'restore':
-        sys.exit(0 if restore_snapshot(args.vm, args.snapshot) else 1)
+        sys.exit(0 if restore_snapshot(args.vm, args.snapshot, args.backend) else 1)
     elif args.action == 'start':
-        sys.exit(0 if start_vm(args.vm, args.wait) else 1)
+        sys.exit(0 if start_vm(args.vm, args.wait, args.backend) else 1)
     elif args.action == 'stop':
-        sys.exit(0 if stop_vm(args.vm) else 1)
+        sys.exit(0 if stop_vm(args.vm, args.backend) else 1)
     elif args.action == 'cycle':
-        ok = restore_snapshot(args.vm, args.snapshot) and start_vm(args.vm, args.wait)
+        ok = restore_snapshot(args.vm, args.snapshot, args.backend) and start_vm(
+            args.vm, args.wait, args.backend
+        )
         time.sleep(5)
-        stop_vm(args.vm)
+        stop_vm(args.vm, args.backend)
         sys.exit(0 if ok else 1)
 
 

@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import MagicMock, patch, call
 from queue import Queue
 
-from filesystem_monitor import _is_noise, InstallationMonitor
+from filesystem_monitor import _is_noise, wait_until_stable, InstallationMonitor
 
 
 class TestIsNoise:
@@ -48,6 +48,18 @@ class TestIsNoise:
 
     def test_lock_extension_is_noise(self):
         assert _is_noise(r"C:\anywhere\db.lock") is True
+
+
+class TestWaitUntilStable:
+    def test_returns_true_after_size_stabilizes(self):
+        with patch("filesystem_monitor.os.path.getsize", side_effect=[10, 20, 20, 20]), \
+             patch("filesystem_monitor.time.sleep"):
+            assert wait_until_stable("file.bin", timeout=5, interval=0.1) is True
+
+    def test_returns_false_when_file_disappears(self):
+        with patch("filesystem_monitor.os.path.getsize", side_effect=OSError), \
+             patch("filesystem_monitor.time.sleep"):
+            assert wait_until_stable("missing.bin", timeout=5, interval=0.1) is False
 
 
 class TestInstallationMonitorOnCreated:

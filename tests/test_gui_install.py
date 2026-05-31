@@ -11,6 +11,7 @@ from gui_install import (
     wait_for_installer_idle,
     get_install_windows,
     _process_windows,
+    cleanup_post_install_processes,
     COMPLETION_KEYWORDS,
 )
 
@@ -431,3 +432,55 @@ class TestProcessWindows:
         mock_kbd.assert_not_called()
         mock_ocr.assert_not_called()
         assert result is False
+
+
+# ---------------------------------------------------------------------------
+# cleanup_post_install_processes — only installer-related processes are killed
+# ---------------------------------------------------------------------------
+
+class TestCleanupPostInstallProcesses:
+    def test_terminates_child_process_only(self):
+        root = MagicMock()
+        root.children.return_value = []
+
+        child = MagicMock()
+        child.name.return_value = "launched_app.exe"
+        child.ppid.return_value = 100
+        child.create_time.return_value = 10.0
+        child.exe.return_value = r"C:\Program Files\App\launched_app.exe"
+
+        unrelated = MagicMock()
+        unrelated.name.return_value = "python.exe"
+        unrelated.ppid.return_value = 1
+        unrelated.create_time.return_value = 10.0
+        unrelated.exe.return_value = r"C:\Python\python.exe"
+
+        def process_for(pid):
+            return {100: root, 200: child, 300: unrelated}[pid]
+
+        with patch("gui_install.psutil.pids", return_value=[100, 200, 300]), \
+             patch("gui_install.psutil.Process", side_effect=process_for), \
+             patch("gui_install.terminate_process_tree") as mock_terminate:
+            cleanup_post_install_processes(root_pid=100, before_pids={100}, started_at=5.0)
+
+        mock_terminate.assert_called_once_with(200)
+
+    def test_ignores_unrelated_new_process(self):
+        root = MagicMock()
+        root.children.return_value = []
+
+        unrelated = MagicMock()
+        unrelated.name.return_value = "notepad.exe"
+        unrelated.ppid.return_value = 1
+        unrelated.create_time.return_value = 10.0
+        unrelated.exe.return_value = r"C:\Windows\System32\notepad.exe"
+
+        def process_for(pid):
+            return {100: root, 200: unrelated}[pid]
+
+        with patch("gui_install.psutil.pids", return_value=[100, 200]), \
+             patch("gui_install.psutil.Process", side_effect=process_for), \
+             patch("gui_install.terminate_process_tree") as mock_terminate:
+            cleanup_post_install_processes(root_pid=100, before_pids={100}, started_at=5.0)
+
+        mock_terminate.assert_not_called()

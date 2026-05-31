@@ -37,6 +37,30 @@ def _is_noise(path: str) -> bool:
     return any(frag in path_lower for frag in _IGNORED_PATH_FRAGMENTS)
 
 
+def wait_until_stable(path: str, timeout: int = 30, interval: float = 1.0) -> bool:
+    last_size = -1
+    stable_count = 0
+    start = time.time()
+
+    while time.time() - start < timeout:
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            return False
+
+        if size == last_size:
+            stable_count += 1
+            if stable_count >= 2:
+                return True
+        else:
+            stable_count = 0
+            last_size = size
+
+        time.sleep(interval)
+
+    return False
+
+
 class InstallationMonitor(FileSystemEventHandler):
     def __init__(self, source_path, destination_path, excluded_paths, manifest_path=None, collection_name="default"):
         self.source_path = source_path
@@ -71,7 +95,7 @@ class InstallationMonitor(FileSystemEventHandler):
                 self.copy_file(src_path)
             self.queue.task_done()
 
-    def on_created(self, event):
+    def _enqueue_event(self, event):
         src_path = os.path.normcase(os.path.abspath(event.src_path))
         if src_path.startswith(tuple(self.excluded_paths)):
             return
@@ -79,6 +103,12 @@ class InstallationMonitor(FileSystemEventHandler):
             logger.debug("Skipping noise file: %s", src_path)
             return
         self.queue.put((event.src_path, event.is_directory))
+
+    def on_created(self, event):
+        self._enqueue_event(event)
+
+    def on_modified(self, event):
+        self._enqueue_event(event)
 
     def process_pending(self):
         """stop_event를 설정하고 큐가 완전히 드레인될 때까지 대기한다."""
@@ -115,13 +145,14 @@ class InstallationMonitor(FileSystemEventHandler):
         dest_path = self._destination_for(src_path)
 
         try:
-            if os.path.exists(dest_path):
-                self._write_manifest(src_path, dest_path, "file", "skipped", "destination exists")
-                logger.debug("File already exists, skipping: %s", dest_path)
+            if not wait_until_stable(src_path):
+                self._write_manifest(src_path, dest_path, "file", "failed", "file did not stabilize")
+                logger.warning("File did not stabilize before copy: %s", src_path)
                 return
             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            status = "updated" if os.path.exists(dest_path) else "copied"
             shutil.copy2(src_path, dest_path)
-            self._write_manifest(src_path, dest_path, "file", "copied")
+            self._write_manifest(src_path, dest_path, "file", status)
         except Exception as e:
             self._write_manifest(src_path, dest_path, "file", "failed", str(e))
             logger.warning("Error copying file %s: %s", src_path, e)

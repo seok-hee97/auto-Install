@@ -14,6 +14,24 @@ from utils import set_windows_error_mode, terminate_process_tree, close_windows
 
 logger = logging.getLogger(__name__)
 
+SAFE_PROCESS_NAMES = {
+    "explorer.exe", "cmd.exe", "powershell.exe", "python.exe", "pythonw.exe",
+    "conhost.exe", "svchost.exe", "winlogon.exe", "csrss.exe", "services.exe",
+    "lsass.exe", "taskhostw.exe", "dwm.exe",
+}
+
+POST_INSTALL_PROCESS_ROOTS = tuple(
+    os.path.normcase(os.path.expandvars(path)).lower()
+    for path in (
+        r"%ProgramFiles%",
+        r"%ProgramFiles(x86)%",
+        r"%ProgramData%",
+        r"%LOCALAPPDATA%",
+        r"%APPDATA%",
+    )
+    if os.path.expandvars(path) != path
+)
+
 COMPLETION_KEYWORDS = [
     "finish", "completed", "complete", "done", "close",
     "마침", "완료", "종료",
@@ -87,7 +105,36 @@ def get_progress_value(progress):
 # UI interaction helpers
 # ---------------------------------------------------------------------------
 
-def click_button(window):
+def _controls(window, control_type: str, backend: str = "uia"):
+    if backend == "win32":
+        try:
+            children = window.children(class_name="Button")
+        except Exception:
+            return []
+        if control_type == "Button":
+            return children
+        result = []
+        for child in children:
+            try:
+                friendly_name = child.friendly_class_name().lower()
+            except Exception:
+                friendly_name = ""
+            if control_type == "CheckBox" and "check" in friendly_name:
+                result.append(child)
+            elif control_type == "RadioButton" and "radio" in friendly_name:
+                result.append(child)
+        return result
+    return window.descendants(control_type=control_type)
+
+
+def _click_control(control, backend: str = "uia"):
+    if backend == "win32":
+        control.click()
+    else:
+        control.click_input()
+
+
+def click_button(window, backend: str = "uia"):
     clicks = [
         # eng
         "next", "install", "finish", "ok", "yes", "accept", "agree",
@@ -110,7 +157,7 @@ def click_button(window):
     ]
     clicked_completion = False
     try:
-        for button in window.descendants(control_type="Button"):
+        for button in _controls(window, "Button", backend):
             button_text = button.window_text().lower()
 
             if any(danger in button_text for danger in DANGER_KEYWORDS):
@@ -120,7 +167,7 @@ def click_button(window):
             for click in clicks:
                 if click in button_text:
                     logger.info("Clicking button: %s", button_text)
-                    button.click_input()
+                    _click_control(button, backend)
                     if any(keyword in button_text for keyword in COMPLETION_KEYWORDS):
                         clicked_completion = True
                     break
@@ -130,28 +177,28 @@ def click_button(window):
     return clicked_completion
 
 
-def check_checkbox(window):
+def check_checkbox(window, backend: str = "uia"):
     # Phase 4.8 Priority 3: break 제거 → 모든 체크박스 순회
     try:
-        for checkbox in window.descendants(control_type="CheckBox"):
+        for checkbox in _controls(window, "CheckBox", backend):
             logger.debug("Checkbox: %s", checkbox.window_text())
             try:
                 state = checkbox.get_toggle_state()
             except Exception:
                 state = None
             if state == 0:
-                checkbox.click_input()
+                _click_control(checkbox, backend)
                 logger.info("Checked a checkbox: %s", checkbox.window_text())
     except Exception as e:
         logger.warning("Checkbox handling error: %s", e)
 
 
-def check_radiobutton(window):
+def check_radiobutton(window, backend: str = "uia"):
     # Phase 4.8 Priority 1: DISAGREE 키워드 건너뜀 + agree_candidate 패턴으로 한 번만 클릭
     # click_input() — 실제 마우스 입력 시뮬레이션 (click()의 WM_CLICK보다 신뢰성 높음)
     agree_candidate = None
     try:
-        for radiobutton in window.descendants(control_type="RadioButton"):
+        for radiobutton in _controls(window, "RadioButton", backend):
             text = radiobutton.window_text().lower()
             logger.debug("RadioButton: %s", text)
             if any(k in text for k in DISAGREE_KEYWORDS_RADIO):
@@ -159,7 +206,7 @@ def check_radiobutton(window):
             if any(k in text for k in AGREE_KEYWORDS):
                 agree_candidate = radiobutton
         if agree_candidate:
-            agree_candidate.click_input()
+            _click_control(agree_candidate, backend)
             logger.info("Checked RadioButton: %s", agree_candidate.window_text())
     except Exception as e:
         logger.warning("RadioButton handling error: %s", e)
@@ -224,7 +271,7 @@ def wait_for_installer_idle(pid: int, threshold: float = 3.0, timeout: int = 15)
         return False
 
 
-def get_all_windows_for_process_tree(root_pid: int) -> list:
+def get_all_windows_for_process_tree(root_pid: int, backend: str = "uia") -> list:
     # Phase 4.8-C: 부모뿐 아니라 자식 프로세스의 창까지 캡처 (pywin32 필요)
     if not _PYWIN32_AVAILABLE:
         return []
@@ -240,7 +287,7 @@ def get_all_windows_for_process_tree(root_pid: int) -> list:
             _, pid = _win32process.GetWindowThreadProcessId(hwnd)
             if pid in pid_set:
                 try:
-                    result.append(Application(backend="uia").window(handle=hwnd))
+                    result.append(Application(backend=backend).window(handle=hwnd))
                 except Exception:
                     pass
 
@@ -253,10 +300,10 @@ def get_all_windows_for_process_tree(root_pid: int) -> list:
         return []
 
 
-def get_install_windows(file_path):
+def get_install_windows(file_path, backend: str = "uia"):
     get_windows = []
     try:
-        desktop = Desktop(backend="uia")
+        desktop = Desktop(backend=backend)
         windows = desktop.windows()
         file_name = os.path.splitext(os.path.basename(file_path))[0].lower()
         file_keyword: list = file_name.split()
@@ -279,7 +326,7 @@ def get_install_windows(file_path):
 # Core install logic
 # ---------------------------------------------------------------------------
 
-def _process_windows(windows) -> bool:
+def _process_windows(windows, backend: str = "uia") -> bool:
     """창 목록에 버튼 클릭·체크박스·라디오버튼·프로그레스바 처리. 완료 버튼 클릭 시 True 반환."""
     clicked_completion = False
     active_window = None  # PASS_WINDOW 제외, 첫 번째 유효 창 (fallback용)
@@ -291,10 +338,10 @@ def _process_windows(windows) -> bool:
         if active_window is None:
             active_window = window
         logger.debug("Processing window: %s", window)
-        if click_button(window):
+        if click_button(window, backend):
             clicked_completion = True
-        check_checkbox(window)
-        check_radiobutton(window)
+        check_checkbox(window, backend)
+        check_radiobutton(window, backend)
         wait_for_progress(window)
 
     if not clicked_completion and active_window is not None:
@@ -307,12 +354,53 @@ def _process_windows(windows) -> bool:
     return clicked_completion
 
 
+def _looks_like_installed_app_path(exe_path: str) -> bool:
+    if not exe_path:
+        return False
+    path = os.path.normcase(exe_path).lower()
+    return any(path.startswith(root) for root in POST_INSTALL_PROCESS_ROOTS)
+
+
+def cleanup_post_install_processes(root_pid: int, before_pids: set, started_at: float) -> None:
+    target_pids = set()
+    try:
+        root = psutil.Process(root_pid)
+        target_pids.update(child.pid for child in root.children(recursive=True))
+    except psutil.NoSuchProcess:
+        pass
+
+    for candidate_pid in set(psutil.pids()) - before_pids - {root_pid}:
+        try:
+            proc = psutil.Process(candidate_pid)
+            name = proc.name().lower()
+            if name in SAFE_PROCESS_NAMES:
+                continue
+            if proc.ppid() == root_pid:
+                target_pids.add(candidate_pid)
+                continue
+            if proc.create_time() >= started_at and _looks_like_installed_app_path(proc.exe()):
+                target_pids.add(candidate_pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        except Exception as e:
+            logger.debug("Skipping post-install process candidate %s: %s", candidate_pid, e)
+
+    for target_pid in sorted(target_pids):
+        try:
+            proc = psutil.Process(target_pid)
+            logger.info("Terminating post-install process: %s (pid=%d)", proc.name(), target_pid)
+            terminate_process_tree(target_pid)
+        except psutil.NoSuchProcess:
+            pass
+
+
 def _try_gui_install(file_path: str, backend: str = "uia", step: int = 20) -> bool:
     """단일 백엔드로 GUI 설치 시도. 성공 시 True 반환."""
     set_windows_error_mode()
     try:
         # Phase 4.8 Priority 2: 설치 전 PID 스냅샷
         before_pids = set(psutil.pids())
+        started_at = time.time()
         app = Application(backend=backend).start(file_path)
         pid = app.process
         clicked_completion = False
@@ -330,9 +418,9 @@ def _try_gui_install(file_path: str, backend: str = "uia", step: int = 20) -> bo
 
             # Phase 4.8-C: app.windows() + PID 트리 + 키워드 탐색 통합
             windows_by_handle: dict = {w.handle: w for w in app.windows()}
-            for w in get_all_windows_for_process_tree(pid):
+            for w in get_all_windows_for_process_tree(pid, backend):
                 windows_by_handle.setdefault(w.handle, w)
-            for w in get_install_windows(file_path):
+            for w in get_install_windows(file_path, backend):
                 windows_by_handle.setdefault(w.handle, w)
 
             windows = list(windows_by_handle.values())
@@ -342,19 +430,14 @@ def _try_gui_install(file_path: str, backend: str = "uia", step: int = 20) -> bo
                 logger.debug("No relevant windows found.")
                 continue
 
-            if _process_windows(windows):
+            if _process_windows(windows, backend):
                 clicked_completion = True
 
         logger.info("GUI install loop complete (backend=%s): %s", backend, file_path)
         close_windows()
 
         # Phase 4.8 Priority 2: 설치 후 자동 실행된 신규 프로세스 종료
-        after_pids = set(psutil.pids())
-        for new_pid in (after_pids - before_pids - {pid}):
-            try:
-                terminate_process_tree(new_pid)
-            except psutil.NoSuchProcess:
-                pass
+        cleanup_post_install_processes(pid, before_pids, started_at)
 
         process_exited = not psutil.pid_exists(pid)
         if clicked_completion and process_exited:
